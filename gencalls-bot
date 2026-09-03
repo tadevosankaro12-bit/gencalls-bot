@@ -1,0 +1,208 @@
+cd ~/gencalls-bot
+cat << 'EOF' > bot.py
+import os, json, telebot, requests, time, threading, logging
+from datetime import datetime
+from telebot import types
+import urllib3
+urllib3.disable_warnings()
+
+logging.getLogger("TeleBot").setLevel(logging.CRITICAL)
+
+TOKEN = "8915393389:AAG7EE9V_QSMnTLoFtKli5YGofrLvmjO_PA"
+ZVONOK_API_KEY = "d0808ab7450fca32147a9285018fe7a5"
+CAMPAIGN_ID = "1783540036"
+SMSRU_API_KEY = "92D687B8-1A07-CEB6-85CD-E0B1442FF4BF"
+
+LAVA_PAY_URL = "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967"
+SUPPORT_USERNAME = "tadevosankaro12"
+ADMIN_IDS = ["8915393389"]
+
+bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=8)
+user_data = {}
+user_state = {}
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+AUDIO_DIR = os.path.join(BASE_DIR, "prank_audios")
+os.makedirs(AUDIO_DIR, exist_ok=True)
+
+DB_FILE = os.path.join(BASE_DIR, "gencalls_db.json")
+CONFIG_FILE = os.path.join(BASE_DIR, "admin_config.json")
+PROMO_FILE = os.path.join(BASE_DIR, "gencalls_promos.json")
+BLACKLIST_FILE = os.path.join(BASE_DIR, "gencalls_blacklist.json")
+CUSTOM_PRANKS_FILE = os.path.join(BASE_DIR, "gencalls_pranks.json")
+
+def load_json(path, default):
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default
+    return default
+
+def save_json(path, data):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception: pass
+
+admin_cfg = load_json(CONFIG_FILE, {"call_price": 49, "max_referrals": 3, "admin_id": "8915393389"})
+db = load_json(DB_FILE, {})
+promocodes = load_json(PROMO_FILE, {"GEN2026": {"rub": 49, "uses": 100, "used_by": []}})
+blacklist = load_json(BLACKLIST_FILE, [])
+
+DEFAULT_PRANKS = {
+    "babka": {"title": "👵 Бабка Лидия", "tag": "ХИТ", "dur": "0:35", "desc": "Скандальная соседка требует вернуть долг.", "file": "babka.mp3", "public": True},
+    "tulip": {"title": "🌷 Тюльпаны оптом", "tag": "ТОП", "dur": "0:40", "desc": "Срочный заказ 500 тюльпанов прямо сейчас.", "file": "tulip.mp3", "public": True},
+    "rkn": {"title": "🏛️ Роскомнадзор", "tag": "ШОК", "dur": "0:45", "desc": "Предупреждение о блокировке интернета.", "file": "rkn.mp3", "public": True},
+    "django": {"title": "🕺 Джанго стриптизер", "tag": "18+", "dur": "0:38", "desc": "Приватный стриптизер звонит в домофон.", "file": "django.mp3", "public": True},
+    "govnovoz": {"title": "🚛 Ассенизатор", "tag": "УГАР", "dur": "0:30", "desc": "Машина приехала: куда шланг кидать?", "file": "govnovoz.mp3", "public": True},
+    "courier": {"title": "🍕 Голодный курьер", "tag": "НОВОЕ", "dur": "0:32", "desc": "Курьер признаётся, что съел пиццу.", "file": "courier.mp3", "public": True}
+}
+
+pranks_db = load_json(CUSTOM_PRANKS_FILE, DEFAULT_PRANKS)
+CALL_PRICE_RUB = admin_cfg.get("call_price", 49)
+
+def is_admin(uid):
+    return str(uid).strip() in ADMIN_IDS or str(uid).strip() == str(admin_cfg.get("admin_id", "")).strip()
+
+def get_user(uid, uname="Друг"):
+    s_uid = str(uid).strip()
+    if s_uid not in db:
+        db[s_uid] = {"name": uname, "balance_rub": 98, "calls_history": [], "routing_mode": "auto"}
+        save_json(DB_FILE, db)
+    return db[s_uid]
+
+def parse_phone(text):
+    if not text: return None
+    digits = "".join(filter(str.isdigit, text.strip()))
+    if len(digits) == 10 and digits.startswith("9"): return "7" + digits
+    if len(digits) == 11 and digits.startswith("8"): return "7" + digits[1:]
+    return digits
+
+def kb_main_menu(uid):
+    u = get_user(uid)
+    bal_rub = u.get("balance_rub", 0)
+    bal_calls = bal_rub // CALL_PRICE_RUB
+    rmode = u.get("routing_mode", "auto")
+    rmode_icon = "⚡ Авто" if rmode == "auto" else ("🇷🇺 РФ (+7)" if rmode == "zvonok" else "🌍 SMS.RU")
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(types.InlineKeyboardButton("🎉 Отправить звонок-розыгрыш", callback_data="catalog"))
+    kb.row(types.InlineKeyboardButton(f"👤 Аккаунт ({bal_rub} ₽ / {bal_calls} 📞)", callback_data="nav_account"), types.InlineKeyboardButton("💰 Пополнить", callback_data="packages_menu"))
+    kb.row(types.InlineKeyboardButton(f"⚙️ Маршрут: {rmode_icon}", callback_data="nav_routing"), types.InlineKeyboardButton("🛟 Поддержка", callback_data="nav_help"))
+    kb.row(types.InlineKeyboardButton("🛡️ Анти-Пранк", callback_data="anti_prank"))
+    return kb
+
+@bot.message_handler(commands=["start", "menu"])
+def cmd_start(m):
+    user_state[m.chat.id] = None
+    get_user(m.chat.id, m.from_user.first_name or "Друг")
+    bot.send_message(m.chat.id, "🎭 *GenCalls — Пранк-Звонки*\n\nВыберите действие в меню ниже:", parse_mode="Markdown", reply_markup=kb_main_menu(m.chat.id))
+
+@bot.message_handler(commands=["admin"])
+def cmd_admin(m):
+    if not is_admin(m.chat.id):
+        bot.reply_to(m, "⛔ У вас нет доступа к админ-панели.")
+        return
+    show_admin_panel(m.chat.id)
+
+def show_admin_panel(chat_id):
+    text = f"👑 *Панель Администратора*\n\n👥 Всего пользователей: *{len(db)}*\n🏷️ Цена 1 звонка: *{CALL_PRICE_RUB} ₽*\n🎙️ Всего пранков: *{len(pranks_db)}*"
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(types.InlineKeyboardButton("🧪 Проверить статус шлюзов", callback_data="adm_check_services"))
+    kb.row(types.InlineKeyboardButton("💳 Выдать баланс юзеру", callback_data="adm_add_balance"), types.InlineKeyboardButton("➖ Списать баланс", callback_data="adm_deduct_balance"))
+    kb.row(types.InlineKeyboardButton("🎙️ Добавить новое аудио", callback_data="adm_upload_audio"))
+    kb.row(types.InlineKeyboardButton("💰 Изменить цену звонка", callback_data="adm_change_price"))
+    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+    bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data == "adm_check_services")
+def on_check_services(c):
+    if not is_admin(c.message.chat.id): return
+    bot.answer_callback_query(c.id, "Проверяем...")
+    z_res, s_res = "Ошибка", "Ошибка"
+    try:
+        r = requests.get(f"https://zvonok.com/manager/cabapi_external/api/v1/phones/call/?public_key={ZVONOK_API_KEY}&campaign_id={CAMPAIGN_ID}", verify=False, timeout=6)
+        z_res = "✅ Подключен" if "status" in r.text or "phone" in r.text else "⚠️ Ошибка"
+    except Exception: z_res = "❌ Нет связи"
+    try:
+        r2 = requests.get(f"https://sms.ru/my/balance?api_id={SMSRU_API_KEY}&json=1", timeout=6)
+        rj = r2.json()
+        s_res = f"✅ Баланс: {rj.get('balance', 0)} ₽" if rj.get("status") == "OK" else "⚠️ Ошибка"
+    except Exception: s_res = "❌ Нет связи"
+    report = f"🧪 *Статус шлюзов:*\n\n1. 🇷🇺 *Zvonok:* {z_res}\n2. 🌍 *SMS.RU:* {s_res}"
+    bot.send_message(c.message.chat.id, report, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda c: c.data == "adm_add_balance")
+def on_adm_add_bal(c):
+    if not is_admin(c.message.chat.id): return
+    user_state[c.message.chat.id] = "adm_waiting_uid"
+    bot.send_message(c.message.chat.id, "Введите **ID пользователя** (цифры) для начисления:")
+
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_uid")
+def step_adm_uid(m):
+    uid = "".join(filter(str.isdigit, m.text.strip()))
+    if not uid: return bot.reply_to(m, "ID должен содержать только цифры:")
+    user_data[m.chat.id] = {"target_uid": uid}
+    user_state[m.chat.id] = "adm_waiting_rub"
+    u = get_user(uid)
+    bot.reply_to(m, f"Пользователь `{uid}` (Баланс: {u.get('balance_rub', 0)} ₽).\nСколько рублей начислить?")
+
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_rub")
+def step_adm_rub(m):
+    user_state[m.chat.id] = None
+    try:
+        amount = int(m.text.strip())
+        t_uid = user_data[m.chat.id]["target_uid"]
+        u = get_user(t_uid)
+        u["balance_rub"] += amount
+        save_json(DB_FILE, db)
+        try: bot.send_message(int(t_uid), f"🎁 Администратор пополнил ваш баланс на +{amount} ₽!")
+        except Exception: pass
+        bot.reply_to(m, f"✅ Успешно начислено {amount} ₽ пользователю {t_uid}!")
+    except Exception: bot.reply_to(m, "Введите корректное число.")
+
+@bot.callback_query_handler(func=lambda c: c.data == "catalog")
+def cb_catalog(c):
+    kb = types.InlineKeyboardMarkup()
+    for k, v in pranks_db.items():
+        kb.row(types.InlineKeyboardButton(f"{v['title']}", callback_data=f"open_prank_{k}"))
+    kb.row(types.InlineKeyboardButton("🔙 Меню", callback_data="back_main"))
+    bot.edit_message_text("🎭 *Каталог розыгрышей:*", c.message.chat.id, c.message.message_id, parse_mode="Markdown", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("open_prank_"))
+def cb_open_prank(c):
+    k = c.data.replace("open_prank_", "")
+    p = pranks_db.get(k, {})
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton(f"🚀 Позвонить ({CALL_PRICE_RUB} ₽)", callback_data=f"call_{k}"))
+    kb.row(types.InlineKeyboardButton("🔙 Каталог", callback_data="catalog"))
+    bot.edit_message_text(f"🎭 *{p.get('title')}*\n\n{p.get('desc')}", c.message.chat.id, c.message.message_id, parse_mode="Markdown", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("call_"))
+def cb_call(c):
+    u = get_user(c.message.chat.id)
+    if u.get("balance_rub", 0) < CALL_PRICE_RUB:
+        return bot.answer_callback_query(c.id, f"Недостаточно средств! Нужно {CALL_PRICE_RUB} ₽", show_alert=True)
+    k = c.data.replace("call_", "")
+    user_data[c.message.chat.id] = {"prank": k}
+    user_state[c.message.chat.id] = "waiting_phone"
+    bot.send_message(c.message.chat.id, "📱 Введите номер телефона жертвы (+79991234567 или +374...):")
+
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_phone")
+def step_phone(m):
+    phone = parse_phone(m.text)
+    if not phone or len(phone) < 8: return bot.reply_to(m, "Некорректный номер:")
+    user_state[m.chat.id] = None
+    u = get_user(m.chat.id)
+    u["balance_rub"] = max(0, u["balance_rub"] - CALL_PRICE_RUB)
+    save_json(DB_FILE, db)
+    bot.reply_to(m, f"🚀 Звонок на номер +{phone} отправлен в обработку!")
+
+@bot.callback_query_handler(func=lambda c: c.data == "back_main")
+def cb_back_main(c):
+    bot.edit_message_text("🎭 *GenCalls — Главное меню*", c.message.chat.id, c.message.message_id, parse_mode="Markdown", reply_markup=kb_main_menu(c.message.chat.id))
+
+print(">>> БОТ ЗАПУЩЕН! <<<")
+bot.infinity_polling()
+EOF
