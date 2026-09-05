@@ -131,24 +131,6 @@ PACKAGES = {
     "pkg_50": {"title": "50 звонков", "rub": 699, "badge": "VIP"}
 }
 
-def generate_yoomoney_link(amount, user_id, package_name, payment_type="AC"):
-    """
-    Генерирует официальную форму Quickpay ЮMoney / ЮKassa со всеми методами:
-    SberPay, Карты, Alfa Pay, Mir Pay, ЮMoney и СБП
-    """
-    base_url = "https://yoomoney.ru/quickpay/confirm.xml"
-    receiver = admin_cfg.get("yoomoney_receiver", YOOMONEY_RECEIVER)
-    payload = {
-        "receiver": receiver,
-        "quickpay-form": "shop",
-        "targets": f"GenCalls: {package_name} (ID {user_id})",
-        "paymentType": payment_type, # 'AC' - карты/СБП/SberPay, 'PC' - ЮMoney
-        "sum": amount,
-        "label": f"gencalls_{user_id}_{int(time.time())}",
-        "successURL": f"https://t.me/{SUPPORT_USERNAME}"
-    }
-    return f"{base_url}?{urllib.parse.urlencode(payload)}"
-
 def is_admin(uid):
     uid_str = str(uid).strip()
     return uid_str in ADMIN_IDS or uid_str == "8682521929"
@@ -427,17 +409,17 @@ def step_phone_input(m):
     w = bot.send_message(chat_id, f"🚀 _Набираем номер +{phone}..._")
     threading.Thread(target=process_call_async, args=(chat_id, phone, prank_key, p["title"], w.message_id), daemon=True).start()
 
-# ---- ОПЛАТА СБП И ЮKASSA (ТОЧНАЯ СТРАНИЦА ЮMONEY) ----
+# ---- ОПЛАТА СБП И ЮMONEY / ЮKASSA ----
 @bot.callback_query_handler(func=lambda c: c.data == "packages_menu")
 def cb_packages(c):
     text = (
         "💳 **Пополнение баланса (СБП / ЮKassa):**\n\n"
         "⚡ **Способы оплаты:**\n"
-        "• 📲 **СБП (Система быстрых платежей)** — без комиссии!\n"
+        "• 📲 **СБП (Система быстрых платежей)**\n"
         "• 🟢 **SberPay** / **Alfa Pay** / **Mir Pay**\n"
-        "• 💳 **Любая Банковская карта** (МИР, Visa, Mastercard)\n"
+        "• 💳 **Банковские карты** (МИР, Visa, Mastercard)\n"
         "• 🟣 **Кошелёк ЮMoney**\n\n"
-        "Выберите нужный пакет звонков:"
+        "Выберите пакет звонков:"
     )
     kb = types.InlineKeyboardMarkup()
     for pid, p in PACKAGES.items():
@@ -452,17 +434,23 @@ def on_buy_package(c):
     if not pkg: return
     
     uid = c.message.chat.id
-    # Официальная форма с кнопками: SberPay, Банковские карты, Alfa Pay, Mir Pay, ЮMoney и СБП
-    pay_url = generate_yoomoney_link(pkg["rub"], uid, pkg["title"], payment_type="AC")
+    # 1. Прямая современная форма ЮMoney (где открывается экран со всеми кнопками)
+    direct_to_url = f"https://yoomoney.ru/to/{YOOMONEY_RECEIVER}/{pkg['rub']}"
     
+    # 2. Форма quickpay со всеми способами
+    quickpay_url = f"https://yoomoney.ru/quickpay/confirm.xml?receiver={YOOMONEY_RECEIVER}&quickpay-form=shop&targets=GenCalls+{pkg['title']}+(ID+{uid})&paymentType=AC&sum={pkg['rub']}&label=gencalls_{uid}"
+
     text = (
         f"📦 **Выбран пакет: {pkg['title']} ({pkg['rub']} ₽)**\n\n"
-        f"Нажмите кнопку ниже — откроется официальная платёжная форма ЮKassa / ЮMoney со всеми способами (СБП, SberPay, картами):\n\n"
-        f"🆔 Ваш ID для начисления: `{uid}`"
+        f"👇 **Выберите удобный способ оплаты:**\n"
+        f"• **Способ 1:** Нажмите кнопку **«⚡ Оплатить через СБП / SberPay»**\n"
+        f"• **Способ 2:** Оплата картой любого банка (МИР/Visa/MC)\n\n"
+        f"🆔 Ваш ID для зачисления: `{uid}`"
     )
     kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton(f"⚡ Оплатить {pkg['rub']} ₽ (СБП / Карты / SberPay)", url=pay_url))
-    kb.row(types.InlineKeyboardButton("👨‍💻 Написать в поддержку", url=f"https://t.me/{SUPPORT_USERNAME}"))
+    kb.row(types.InlineKeyboardButton(f"⚡ Оплатить {pkg['rub']} ₽ (СБП / SberPay / Карты)", url=direct_to_url))
+    kb.row(types.InlineKeyboardButton(f"💳 Альтернативная форма ({pkg['rub']} ₽)", url=quickpay_url))
+    kb.row(types.InlineKeyboardButton("👨‍💻 Поддержка / Ручное зачисление", url=f"https://t.me/{SUPPORT_USERNAME}"))
     kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
     safe_nav(c, text, reply_markup=kb)
 
@@ -696,3 +684,4 @@ while True:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception:
         time.sleep(2)
+        
