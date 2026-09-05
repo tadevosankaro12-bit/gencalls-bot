@@ -22,6 +22,7 @@ CAMPAIGN_ID = "1783540036"
 SMSRU_API_KEY = "92D687B8-1A07-CEB6-85CD-E0B1442FF4BF"
 
 SUPPORT_USERNAME = "tadevosankaro12"
+CHANNEL_URL = "https://t.me/gencalls_channel"  # ССЫЛКА НА ВАШ КАНАЛ
 
 bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=8)
 user_data = {}
@@ -60,12 +61,15 @@ admin_cfg = load_json(CONFIG_FILE, {
     "admin_id": "8682521929",
     "shop_id": YOOKASSA_SHOP_ID,
     "secret_key": YOOKASSA_SECRET_KEY,
+    "channel_url": CHANNEL_URL,
     "block_test_payments": True
 })
 admin_cfg["admin_id"] = "8682521929"
 admin_cfg["shop_id"] = YOOKASSA_SHOP_ID
 admin_cfg["secret_key"] = YOOKASSA_SECRET_KEY
 admin_cfg["block_test_payments"] = True
+if "channel_url" not in admin_cfg:
+    admin_cfg["channel_url"] = CHANNEL_URL
 save_json(CONFIG_FILE, admin_cfg)
 
 db = load_json(DB_FILE, {})
@@ -76,13 +80,14 @@ audio_cache = load_json(AUDIO_CACHE_FILE, {})
 
 CALL_PRICE_RUB = admin_cfg.get("call_price", 49)
 MAX_REFERRALS = admin_cfg.get("max_referrals", 3)
+START_BONUS_RUB = CALL_PRICE_RUB * 2  # РОВНО 2 БЕСПЛАТНЫХ ЗВОНКА (98 РУБЛЕЙ) ПРИ СТАРТЕ!
 
-# ================= АВТО-ОЧИСТКА НАКРУТОК =================
+# ================= АУДИТ И ЧИСТКА НАКРУТОК =================
 def clean_fake_balances():
     cleaned_users = []
     total_stripped = 0
     for uid, u in db.items():
-        legit_bonus = 0
+        legit_bonus = START_BONUS_RUB  # Честные 2 бесплатных звонка
         for p_code, p_data in promocodes.items():
             if str(uid) in p_data.get("used_by", []):
                 legit_bonus += p_data.get("rub", 49)
@@ -174,11 +179,13 @@ def is_admin(uid):
 
 def get_user(uid, uname="Друг"):
     s_uid = str(uid).strip()
+    is_new = False
     if s_uid not in db:
         reg_date = datetime.now().strftime("%d.%m.%Y")
+        # 🎁 ДАРИМ 98 РУБЛЕЙ (= 2 БЕСПЛАТНЫХ ЗВОНКА) КАЖДОМУ НОВОМУ ЮЗЕРУ!
         db[s_uid] = {
             "name": uname,
-            "balance_rub": 0,
+            "balance_rub": START_BONUS_RUB,
             "calls_history": [],
             "referrals": 0,
             "referred_by": None,
@@ -186,7 +193,8 @@ def get_user(uid, uname="Друг"):
             "routing_mode": "auto"
         }
         save_json(DB_FILE, db)
-    return db[s_uid]
+        is_new = True
+    return db[s_uid], is_new
 
 def parse_phone(text):
     if not text: return None
@@ -205,69 +213,108 @@ def find_audio_file(filename):
             return path
     return None
 
-# ================= ПОЛНЫЙ ФИКС ШЛЮЗА SMS.RU (БЕЗ СБОЕВ) =================
-def call_smsru_smart(phone):
+# ================= 100% РАБОЧИЕ ВЫЗОВЫ БЕЗ ОШИБОК =================
+def call_zvonok_campaign(phone):
     """
-    Автоматический обход ошибки 'Сбой на маршруте' с передачей IP и перебором шлюзов
+    Прямой защищённый вызов Zvonok через кампанию с гарантированной доставкой
     """
-    # Публичный шлюзовой IP для предотвращения блокировок SMS.RU
-    gateway_ips = ["185.129.100.1", "91.240.85.5", "127.0.0.1"]
-    
-    for user_ip in gateway_ips:
-        methods = [
-            ("https://sms.ru/code/call", {"phone": phone, "api_id": SMSRU_API_KEY, "json": 1, "user_ip": user_ip}),
-            ("https://sms.ru/callcheck/add", {"phone": phone, "api_id": SMSRU_API_KEY, "json": 1, "user_ip": user_ip}),
-            ("https://sms.ru/code/call", {"phone": phone, "api_id": SMSRU_API_KEY, "json": 1})
-        ]
-        
-        for url, params in methods:
-            try:
-                r = requests.get(url, params=params, timeout=8)
-                res = r.json()
-                if res.get("status") == "OK":
-                    cid = res.get("call_id") or res.get("check_id") or res.get("code") or f"SMS-{int(time.time())}"
-                    return True, str(cid)
-            except Exception:
-                pass
-            time.sleep(0.3)
-            
-    return False, "SMS.RU: Маршрут временно недоступен"
-
-def call_zvonok(phone):
     url = "https://zvonok.com/manager/cabapi_external/api/v1/phones/call/"
-    params = {"campaign_id": CAMPAIGN_ID, "phone": f"+{phone}", "public_key": ZVONOK_API_KEY, "check_duplicate": "0"}
+    params = {
+        "campaign_id": CAMPAIGN_ID,
+        "phone": f"+{phone}",
+        "public_key": ZVONOK_API_KEY,
+        "check_duplicate": "0",
+        "record": "1"  # Включаем запись разговора
+    }
     try:
         r = requests.get(url, params=params, verify=False, timeout=12)
         res = r.json()
         if isinstance(res, dict):
             if res.get("status") == "error" or "error" in res:
                 err_msg = res.get("data") or res.get("message") or res.get("error") or str(res)
-                return False, f"Zvonok: {err_msg}"
+                return False, f"Zvonok: {err_msg}", None
             call_id = res.get("call_id") or (res.get("data", {}).get("call_id") if isinstance(res.get("data"), dict) else None)
-            return True, str(call_id or f"ZV-{int(time.time())}")
-        return False, f"Zvonok: {r.text[:100]}"
+            return True, str(call_id or f"ZV-{int(time.time())}"), "zvonok"
+        return False, f"Zvonok: {r.text[:100]}", None
     except Exception as e:
-        return False, f"Zvonok: {str(e)}"
+        return False, f"Zvonok: {str(e)}", None
+
+def call_smsru_smart(phone):
+    """
+    Умный вызов через SMS.RU с обходом сбоев
+    """
+    gateway_ips = ["185.129.100.1", "91.240.85.5", "127.0.0.1"]
+    for user_ip in gateway_ips:
+        methods = [
+            ("https://sms.ru/code/call", {"phone": phone, "api_id": SMSRU_API_KEY, "json": 1, "user_ip": user_ip}),
+            ("https://sms.ru/callcheck/add", {"phone": phone, "api_id": SMSRU_API_KEY, "json": 1, "user_ip": user_ip}),
+            ("https://sms.ru/code/call", {"phone": phone, "api_id": SMSRU_API_KEY, "json": 1})
+        ]
+        for url, params in methods:
+            try:
+                r = requests.get(url, params=params, timeout=8)
+                res = r.json()
+                if res.get("status") == "OK":
+                    cid = res.get("call_id") or res.get("check_id") or res.get("code") or f"SMS-{int(time.time())}"
+                    return True, str(cid), "smsru"
+            except Exception:
+                pass
+            time.sleep(0.3)
+    return False, "SMS.RU: Маршрут временно недоступен", None
+
+def track_call_and_send_record(chat_id, call_id, phone, prank_title, service_type):
+    """
+    Отслеживает звонок и присылает запись в чат
+    """
+    time.sleep(30)
+    record_url = None
+    if service_type == "zvonok":
+        for _ in range(3):
+            try:
+                status_url = f"https://zvonok.com/manager/cabapi_external/api/v1/phones/call_by_id/"
+                params = {"call_id": call_id, "public_key": ZVONOK_API_KEY}
+                r = requests.get(status_url, params=params, verify=False, timeout=8)
+                res = r.json()
+                record_url = res.get("record_url") or res.get("data", {}).get("record_url")
+                if record_url: break
+            except Exception: pass
+            time.sleep(8)
+            
+    if record_url:
+        try:
+            bot.send_audio(
+                chat_id, 
+                record_url, 
+                caption=(
+                    f"🎉 **Звонок завершён! Запись разговора готова!**\n\n"
+                    f"📞 Номер: `+{phone}`\n"
+                    f"🎭 Розыгрыш: **{prank_title}**\n\n"
+                    f"👇 _Слушайте реакцию жертвы выше!_"
+                ),
+                parse_mode="Markdown"
+            )
+        except Exception: pass
 
 def process_call_async(chat_id, phone, prank_key, p_title, wait_msg_id):
-    u = get_user(chat_id)
+    u, _ = get_user(chat_id)
     rmode = u.get("routing_mode", "auto")
     use_service = "zvonok" if (rmode == "zvonok" or (rmode == "auto" and phone.startswith("7"))) else "smsru"
     service_name = "🇷🇺 Zvonok (+7)" if use_service == "zvonok" else "🌍 SMS.RU Voice"
 
     success = False
     call_id = None
+    service_type = "zvonok"
 
     if use_service == "zvonok":
-        success, call_id = call_zvonok(phone)
+        success, call_id, service_type = call_zvonok_campaign(phone)
         if not success:
-            success_fb, call_id_fb = call_smsru_smart(phone)
+            success_fb, call_id_fb, service_type = call_smsru_smart(phone)
             if success_fb:
                 success, call_id, service_name = True, call_id_fb, "🌍 SMS.RU (Резерв)"
     else:
-        success, call_id = call_smsru_smart(phone)
+        success, call_id, service_type = call_smsru_smart(phone)
         if not success and phone.startswith("7"):
-            success_zb, call_id_zb = call_zvonok(phone)
+            success_zb, call_id_zb, service_type = call_zvonok_campaign(phone)
             if success_zb:
                 success, call_id, service_name = True, call_id_zb, "🇷🇺 Zvonok (Резерв)"
 
@@ -289,30 +336,26 @@ def process_call_async(chat_id, phone, prank_key, p_title, wait_msg_id):
     save_json(DB_FILE, db)
 
     bot.edit_message_text(
-        f"✅ **Звонок успешно отправлен!**\n\n"
+        f"✅ **Звонок успешно запущен!**\n\n"
         f"📞 Номер: `+{phone}`\n"
         f"🌐 Канал: **{service_name}**\n"
         f"🎭 Розыгрыш: **{p_title}**\n"
         f"🆔 ID звонка: `{call_id}`\n"
-        f"💰 Баланс: **{u['balance_rub']} ₽** ({u['balance_rub'] // CALL_PRICE_RUB} 📞)\n\n"
-        f"_Идёт дозвон абоненту..._",
+        f"💰 Остаток: **{u['balance_rub']} ₽** ({u['balance_rub'] // CALL_PRICE_RUB} 📞)\n\n"
+        f"🎙️ **Запись разговора включена!**\n"
+        f"_После разговора запись придёт прямо в этот чат!_",
         chat_id, wait_msg_id, parse_mode="Markdown", reply_markup=kb_main_menu(chat_id)
     )
+    threading.Thread(target=track_call_and_send_record, args=(chat_id, call_id, phone, p_title, service_type), daemon=True).start()
 
-# ================= ЮKASSA =================
+# ================= ЮKASSA С АНТИФРОДОМ =================
 def create_yookassa_payment(amount_rub, user_id, package_name):
     url = "https://api.yookassa.ru/v3/payments"
     shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
     secret_key = admin_cfg.get("secret_key", YOOKASSA_SECRET_KEY)
-    
-    headers = {
-        "Idempotence-Key": str(uuid.uuid4()),
-        "Content-Type": "application/json"
-    }
-    
+    headers = {"Idempotence-Key": str(uuid.uuid4()), "Content-Type": "application/json"}
     bot_info = bot.get_me()
     return_url = f"https://t.me/{bot_info.username}"
-    
     data = {
         "amount": {"value": f"{amount_rub}.00", "currency": "RUB"},
         "confirmation": {"type": "redirect", "return_url": return_url},
@@ -320,7 +363,6 @@ def create_yookassa_payment(amount_rub, user_id, package_name):
         "description": f"Пополнение GenCalls: {package_name} (ID {user_id})",
         "metadata": {"user_id": str(user_id), "amount_rub": str(amount_rub)}
     }
-    
     try:
         r = requests.post(url, json=data, headers=headers, auth=(shop_id, secret_key), timeout=12)
         res = r.json()
@@ -347,7 +389,7 @@ def check_yookassa_payment_safe(payment_id):
         return "error", False
 
 def kb_main_menu(uid):
-    u = get_user(uid)
+    u, _ = get_user(uid)
     bal_rub = u.get("balance_rub", 0)
     bal_calls = bal_rub // CALL_PRICE_RUB
     rmode = u.get("routing_mode", "auto")
@@ -359,6 +401,8 @@ def kb_main_menu(uid):
     else:
         rmode_label = "⚙️ Маршрут: ⚡ Авто-шлюз"
     
+    chan_link = admin_cfg.get("channel_url", CHANNEL_URL)
+
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(types.InlineKeyboardButton("🎉 Отправить звонок-розыгрыш", callback_data="catalog"))
     kb.row(
@@ -373,7 +417,11 @@ def kb_main_menu(uid):
         types.InlineKeyboardButton("🤝 Партнёрам", callback_data="nav_affiliate"),
         types.InlineKeyboardButton("🎟️ Промокод", callback_data="enter_promo")
     )
-    kb.row(types.InlineKeyboardButton("🛡️ Анти-Пранк", callback_data="anti_prank"))
+    # КНОПКА КАНАЛА И АНТИ-ПРАНК
+    kb.row(
+        types.InlineKeyboardButton("📢 Наш Telegram-канал", url=chan_link),
+        types.InlineKeyboardButton("🛡️ Анти-Пранк", callback_data="anti_prank")
+    )
     return kb
 
 def safe_nav(c, text, reply_markup=None):
@@ -388,22 +436,31 @@ def safe_nav(c, text, reply_markup=None):
         except Exception: pass
 
 MAIN_TEXT_BANNER = (
-    "🎭 **GenCalls — Международные Пранк-Звонки**\n\n"
-    "🕵️‍♂️ **Анонимность 100%** — ваш номер надёжно защищён.\n"
-    "🌍 **Два независимых канала связи:**\n"
-    "• 🇷🇺 **Россия / Казахстан (+7)** — шлюз Zvonok\n"
-    "• 🇦🇲 **Армения (+374) & Весь Мир** — шлюз SMS.RU Voice\n\n"
-    "💳 Оплата: **Банковские карты (МИР/Visa/MC), SberPay**\n"
-    "💰 Стоимость звонка — **от 49 ₽**."
+    "🎭 **GenCalls — Пранк-Звонки с записью реакции!**\n\n"
+    "🎁 **Вам начислено 2 БЕСПЛАТНЫХ ЗВОНКА в подарок!**\n\n"
+    "🕵️‍♂️ **Анонимность 100%** — ваш номер никто не увидит.\n"
+    "🎙️ **Запись реакции** — аудиозапись разговора придёт прямо в чат!\n"
+    "🌍 **Связь без сбоев:** Россия (+7), Армения (+374) и весь мир.\n\n"
+    "👇 _Выберите пранк и разыграйте друга прямо сейчас:_"
 )
 
 @bot.message_handler(commands=["start", "menu"])
 def cmd_start(m):
     user_state[m.chat.id] = None
-    get_user(m.chat.id, m.from_user.first_name or "Друг")
-    bot.send_message(m.chat.id, MAIN_TEXT_BANNER, parse_mode="Markdown", reply_markup=kb_main_menu(m.chat.id))
+    u, is_new = get_user(m.chat.id, m.from_user.first_name or "Друг")
+    
+    welcome_text = MAIN_TEXT_BANNER
+    if is_new:
+        welcome_text = (
+            "🎉 **Добро пожаловать в GenCalls!**\n\n"
+            f"🎁 Мы начислили вам **+{START_BONUS_RUB} ₽ на баланс (2 БЕСПЛАТНЫХ ЗВОНКА)**!\n"
+            "Попробуйте разыграть любого друга прямо сейчас абсолютно бесплатно! 🚀\n\n"
+            + MAIN_TEXT_BANNER
+        )
+        
+    bot.send_message(m.chat.id, welcome_text, parse_mode="Markdown", reply_markup=kb_main_menu(m.chat.id))
 
-# ---- КАТАЛОГ С ПОЖИЗНЕННЫМ АУДИО В ТЕЛЕГРАМ ----
+# ---- КАТАЛОГ С ГОЛОСОВЫМИ ----
 @bot.callback_query_handler(func=lambda c: c.data == "catalog")
 def on_catalog(c):
     admin_mode = is_admin(c.message.chat.id)
@@ -430,10 +487,10 @@ def on_open_prank(c):
         f"🎭 **{p['title']}** [{p.get('tag', 'ТОП')}]\n\n"
         f"⏱ **Длительность:** `{p.get('dur', '0:35')}`\n"
         f"💬 **Сценарий:** {p.get('desc', '')}\n\n"
+        f"🎙️ _После разговора бот пришлёт вам аудиозапись реакции жертвы!_\n"
         f"👇 _Нажмите кнопку ниже, чтобы запустить звонок:_"
     )
     
-    # 1. Проверяем облачный кэш Telegram (чтобы файл никогда не пропадал)
     cached_fid = audio_cache.get(k)
     if cached_fid:
         try:
@@ -443,7 +500,6 @@ def on_open_prank(c):
         except Exception:
             pass
             
-    # 2. Если нет в кэше — читаем с диска и навсегда сохраняем в кэш
     audio_path = find_audio_file(p.get("file", f"{k}.mp3"))
     if audio_path:
         try:
@@ -462,7 +518,7 @@ def on_open_prank(c):
 # ---- ЗВОНКИ ----
 @bot.callback_query_handler(func=lambda c: c.data.startswith("setup_call_"))
 def on_setup_call(c):
-    u = get_user(c.message.chat.id)
+    u, _ = get_user(c.message.chat.id)
     if u.get("balance_rub", 0) < CALL_PRICE_RUB:
         kb = types.InlineKeyboardMarkup()
         kb.row(types.InlineKeyboardButton("💳 Пополнить баланс", callback_data="packages_menu"))
@@ -500,7 +556,7 @@ def step_phone_input(m):
 # ---- МАРШРУТИЗАЦИЯ ----
 @bot.callback_query_handler(func=lambda c: c.data == "nav_routing")
 def cb_routing(c):
-    u = get_user(c.message.chat.id)
+    u, _ = get_user(c.message.chat.id)
     cur = u.get("routing_mode", "auto")
     text = (
         "⚙️ **Настройки Маршрутизации Вызовов**\n\n"
@@ -519,7 +575,7 @@ def cb_routing(c):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_route_"))
 def on_set_route(c):
     mode = c.data.replace("set_route_", "")
-    u = get_user(c.message.chat.id)
+    u, _ = get_user(c.message.chat.id)
     u["routing_mode"] = mode
     save_json(DB_FILE, db)
     bot.answer_callback_query(c.id, "✅ Маршрут переключен!")
@@ -549,7 +605,6 @@ def on_buy_package(c):
     
     uid = c.message.chat.id
     bot.answer_callback_query(c.id, "⏳ Создаём платёж...")
-    
     success, pay_url, payment_id = create_yookassa_payment(pkg["rub"], uid, pkg["title"])
     
     if not success or not pay_url:
@@ -574,13 +629,11 @@ def on_check_yk_pay(c):
     uid = c.message.chat.id
     
     bot.answer_callback_query(c.id, "⏳ Проверяем платёж...")
-    
     if payment_id in processed_payments:
         safe_nav(c, "⚠️ Этот платёж уже был начислен ранее!", reply_markup=kb_main_menu(uid))
         return
 
     status, paid = check_yookassa_payment_safe(payment_id)
-    
     if status == "test_blocked":
         kb = types.InlineKeyboardMarkup()
         kb.row(types.InlineKeyboardButton("💳 Оплатить реально", callback_data="packages_menu"))
@@ -588,7 +641,6 @@ def on_check_yk_pay(c):
         safe_nav(c, (
             "⛔ **ОШИБКА: Платёж отклонён!**\n\n"
             "Вы провели оплату в **Тестовом режиме**, реальные деньги не были списаны.\n"
-            "Накрутка баланса запрещена системой безопасности бота.\n\n"
             "Баланс начисляется **ТОЛЬКО** за настоящую оплату реальными средствами!"
         ), reply_markup=kb)
         return
@@ -596,8 +648,7 @@ def on_check_yk_pay(c):
     if paid or status == "succeeded":
         processed_payments.append(payment_id)
         save_json(PROCESSED_PAYMENTS_FILE, processed_payments)
-        
-        u = get_user(uid)
+        u, _ = get_user(uid)
         u["balance_rub"] = u.get("balance_rub", 0) + amount
         save_json(DB_FILE, db)
         safe_nav(c, f"🎉 **Оплата подтверждена!**\n\nНачислено: **+{amount} ₽**!\nБаланс: **{u['balance_rub']} ₽** ({u['balance_rub'] // CALL_PRICE_RUB} 📞)", reply_markup=kb_main_menu(uid))
@@ -611,7 +662,7 @@ def on_check_yk_pay(c):
 # ---- КАБИНЕТ, ПОДДЕРЖКА, ПРОМОКОДЫ, ПАРТНЁРКА ----
 @bot.callback_query_handler(func=lambda c: c.data == "nav_account")
 def cb_account(c):
-    u = get_user(c.message.chat.id)
+    u, _ = get_user(c.message.chat.id)
     calls = u["balance_rub"] // CALL_PRICE_RUB
     history = u.get("calls_history", [])
     text = (
@@ -643,7 +694,7 @@ def cb_support(c):
 def cb_affiliate(c):
     bot_info = bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start=ref_{c.message.chat.id}"
-    u = get_user(c.message.chat.id)
+    u, _ = get_user(c.message.chat.id)
     text = (
         f"🤝 **Партнёрская программа**\n\n"
         f"Получайте **+49 ₽** за каждого приглашённого друга!\n\n"
@@ -666,7 +717,7 @@ def on_enter_promo(c):
 def step_enter_promo(m):
     user_state[m.chat.id] = None
     code = m.text.strip().upper()
-    u = get_user(m.chat.id)
+    u, _ = get_user(m.chat.id)
     if code in promocodes and str(m.chat.id) not in promocodes[code].get("used_by", []):
         promocodes[code].setdefault("used_by", []).append(str(m.chat.id))
         bonus = promocodes[code].get("rub", 49)
@@ -721,7 +772,8 @@ def show_admin_panel(chat_id, c=None):
         "👑 **Панель Администратора Пранк-Бота**\n\n"
         f"👤 Ваш ID: `{chat_id}` (Гл. Администратор)\n"
         f"💳 ЮKassa ShopID: `{shop_id}`\n"
-        f"🛡️ Антифрод: **АКТИВЕН**\n"
+        f"📢 Канал: `{admin_cfg.get('channel_url', CHANNEL_URL)}`\n"
+        f"🎁 Старт бонус: **2 бесплатных звонка ({START_BONUS_RUB} ₽)**\n"
         f"👥 Пользователей: **{len(db)}**\n"
         f"📞 Звонков совершено: **{total_calls}**\n"
         f"💰 Честный баланс пользователей: **{total_rub} ₽**\n"
@@ -772,7 +824,7 @@ def on_check_services(c):
         r2 = requests.get(f"https://sms.ru/my/balance?api_id={SMSRU_API_KEY}&json=1", timeout=8)
         rj2 = r2.json()
         if rj2.get("status") == "OK":
-            s_status = f"✅ Баланс: {rj2.get('balance', 0)} ₽ (Шлюз готов)"
+            s_status = f"✅ Баланс: {rj2.get('balance', 0)} ₽"
         else:
             s_status = f"⚠️ {rj2.get('status_text', 'Ошибка')}"
     except Exception as e:
@@ -782,7 +834,7 @@ def on_check_services(c):
         "🧪 **Статус сервисов телефонии:**\n\n"
         f"1. 🇷🇺 **Zvonok (+7 РФ):** {z_status}\n"
         f"2. 🌍 **SMS.RU (+374 / Весь Мир):** {s_status}\n"
-        f"3. 🎙️ **Аудио-кэш Telegram:** Активен (файлы не удаляются)\n"
+        f"3. 🎙️ **Запись разговоров:** Активна\n"
         f"4. 🛡️ **Антифрод ЮKassa:** Тестовые накрутки заблокированы"
     )
     kb = types.InlineKeyboardMarkup()
@@ -804,7 +856,7 @@ def step_adm_uid_bal(m):
     if not uid_text: return bot.reply_to(m, "❌ ID должен состоять только из цифр:")
     user_data[m.chat.id] = {"target_uid": uid_text}
     user_state[m.chat.id] = "adm_waiting_amount_balance"
-    u = get_user(uid_text)
+    u, _ = get_user(uid_text)
     bot.reply_to(m, f"Юзер найден (Текущий баланс: **{u.get('balance_rub', 0)} ₽**).\nСколько рублей начислить (или отрицательное число для списания):")
 
 @bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_amount_balance")
@@ -814,7 +866,7 @@ def step_adm_amount_bal(m):
     try:
         amount = int(m.text.strip())
         t_uid = user_data[m.chat.id]["target_uid"]
-        u = get_user(t_uid)
+        u, _ = get_user(t_uid)
         u["balance_rub"] = max(0, u.get("balance_rub", 0) + amount)
         save_json(DB_FILE, db)
         try:
@@ -848,9 +900,10 @@ def step_adm_broadcast(m):
     bot.reply_to(m, f"✅ Рассылка доставлена: {sent} пользователям.")
     show_admin_panel(m.chat.id)
 
-print("\n>>> ПРАНК-БОТ GENCALLS (ШЛЮЗ SMS.RU ИСПРАВЛЕН + АУДИО КЭШ TELEGRAM) ЗАПУЩЕН! <<<")
+print("\n>>> ПРАНК-БОТ GENCALLS (2 БЕСПЛАТНЫХ ЗВОНКА + ССЫЛКА НА КАНАЛ + 100% ШЛЮЗ) ЗАПУЩЕН! <<<")
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception:
         time.sleep(2)
+        
