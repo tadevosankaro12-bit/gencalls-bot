@@ -1,4 +1,4 @@
-import os, json, telebot, requests, time, threading, logging, urllib.parse
+import os, json, telebot, requests, time, threading, logging, uuid
 from datetime import datetime
 from telebot import types
 import urllib3
@@ -12,8 +12,9 @@ TOKEN = "8915393389:AAG7EE9V_QSMnTLoFtKli5YGofrLvmjO_PA"
 # ВАШ TELEGRAM ID
 ADMIN_IDS = ["8682521929", "8915393389"]
 
-# ВАШ КОШЕЛЕК ЮMONEY / ЮKASSA
-YOOMONEY_RECEIVER = "4100119616287380"
+# ДАННЫЕ ЮKASSA (ИЗ ВАШЕГО КАБИНЕТА)
+YOOKASSA_SHOP_ID = "1457004"
+YOOKASSA_SECRET_KEY = "test_5G_U5bmrnZ80QXZuhZe61guqmt9gwwmuOuvCzYaSkVI"
 
 # Телефония
 ZVONOK_API_KEY = "d0808ab7450fca32147a9285018fe7a5"
@@ -55,9 +56,12 @@ admin_cfg = load_json(CONFIG_FILE, {
     "call_price": 49,
     "max_referrals": 3,
     "admin_id": "8682521929",
-    "yoomoney_receiver": YOOMONEY_RECEIVER
+    "shop_id": YOOKASSA_SHOP_ID,
+    "secret_key": YOOKASSA_SECRET_KEY
 })
 admin_cfg["admin_id"] = "8682521929"
+admin_cfg["shop_id"] = YOOKASSA_SHOP_ID
+admin_cfg["secret_key"] = YOOKASSA_SECRET_KEY
 save_json(CONFIG_FILE, admin_cfg)
 
 db = load_json(DB_FILE, {})
@@ -161,6 +165,67 @@ def parse_phone(text):
         return "7" + digits[1:]
     return digits
 
+# ================= ОФИЦИАЛЬНЫЙ API ЮKASSA (ТОЧНАЯ СТРАНИЦА ОПЛАТЫ) =================
+def create_yookassa_payment(amount_rub, user_id, package_name):
+    """
+    Создаёт платёж через API ЮKassa.
+    Возвращает прямую ссылку на официальную страницу оплаты ЮKassa
+    со всеми методами: SberPay, СБП, Карты, Alfa Pay, Mir Pay, ЮMoney.
+    """
+    url = "https://api.yookassa.ru/v3/payments"
+    shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
+    secret_key = admin_cfg.get("secret_key", YOOKASSA_SECRET_KEY)
+    
+    headers = {
+        "Idempotence-Key": str(uuid.uuid4()),
+        "Content-Type": "application/json"
+    }
+    
+    bot_info = bot.get_me()
+    return_url = f"https://t.me/{bot_info.username}"
+    
+    data = {
+        "amount": {
+            "value": f"{amount_rub}.00",
+            "currency": "RUB"
+        },
+        "confirmation": {
+            "type": "redirect",
+            "return_url": return_url
+        },
+        "capture": True,
+        "description": f"Пополнение GenCalls: {package_name} (Пользователь {user_id})",
+        "metadata": {
+            "user_id": str(user_id),
+            "amount_rub": str(amount_rub)
+        }
+    }
+    
+    try:
+        r = requests.post(url, json=data, headers=headers, auth=(shop_id, secret_key), timeout=12)
+        res = r.json()
+        if "confirmation" in res and "confirmation_url" in res["confirmation"]:
+            payment_url = res["confirmation"]["confirmation_url"]
+            payment_id = res["id"]
+            return True, payment_url, payment_id
+        return False, res.get("description", str(res)), None
+    except Exception as e:
+        return False, str(e), None
+
+def check_yookassa_payment(payment_id):
+    """Проверяет статус платежа в ЮKassa"""
+    url = f"https://api.yookassa.ru/v3/payments/{payment_id}"
+    shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
+    secret_key = admin_cfg.get("secret_key", YOOKASSA_SECRET_KEY)
+    try:
+        r = requests.get(url, auth=(shop_id, secret_key), timeout=10)
+        res = r.json()
+        status = res.get("status")
+        paid = res.get("paid", False)
+        return status, paid, res
+    except Exception:
+        return "error", False, {}
+
 def kb_main_menu(uid):
     u = get_user(uid)
     bal_rub = u.get("balance_rub", 0)
@@ -178,7 +243,7 @@ def kb_main_menu(uid):
     kb.row(types.InlineKeyboardButton("🎉 Отправить звонок-розыгрыш", callback_data="catalog"))
     kb.row(
         types.InlineKeyboardButton(f"👤 Аккаунт ({bal_rub} ₽ / {bal_calls} 📞)", callback_data="nav_account"),
-        types.InlineKeyboardButton("💳 Пополнить (СБП / ЮKassa)", callback_data="packages_menu")
+        types.InlineKeyboardButton("💳 Пополнить (ЮKassa)", callback_data="packages_menu")
     )
     kb.row(
         types.InlineKeyboardButton(rmode_label, callback_data="nav_routing"),
@@ -208,7 +273,7 @@ MAIN_TEXT_BANNER = (
     "🌍 **Два независимых канала связи:**\n"
     "• 🇷🇺 **Россия / Казахстан (+7)** — шлюз Zvonok\n"
     "• 🇦🇲 **Армения (+374) & Весь Мир** — шлюз SMS.RU Voice\n\n"
-    "💳 Оплата: **СБП, SberPay, Любые Банковские Карты (ЮKassa / ЮMoney)**\n"
+    "💳 Оплата: **ЮKassa (СБП, SberPay, Карты МИР/Visa/MC, Alfa Pay)**\n"
     "💰 Стоимость звонка — **от 49 ₽**."
 )
 
@@ -409,19 +474,20 @@ def step_phone_input(m):
     w = bot.send_message(chat_id, f"🚀 _Набираем номер +{phone}..._")
     threading.Thread(target=process_call_async, args=(chat_id, phone, prank_key, p["title"], w.message_id), daemon=True).start()
 
-# ---- ОПЛАТА СБП И ЮMONEY / ЮKASSA ----
+# ================= ОПЛАТА ЧЕРЕЗ ОФИЦИАЛЬНУЮ СТРАНИЦУ ЮKASSA =================
 @bot.callback_query_handler(func=lambda c: c.data == "packages_menu")
 def cb_packages(c):
     text = (
-        "💳 **Пополнение баланса (СБП / ЮKassa):**\n\n"
-        "⚡ **Способы оплаты:**\n"
+        "💳 **Пополнение баланса (ЮKassa):**\n\n"
+        "Официальная страница оплаты со всеми способами:\n"
+        "• 🟢 **SberPay**\n"
         "• 📲 **СБП (Система быстрых платежей)**\n"
-        "• 🟢 **SberPay** / **Alfa Pay** / **Mir Pay**\n"
-        "• 💳 **Банковские карты** (МИР, Visa, Mastercard)\n"
-        "• 🟣 **Кошелёк ЮMoney**\n\n"
-        "Выберите пакет звонков:"
+        "• 💳 **Банковская карта (МИР, Visa, Mastercard)**\n"
+        "• 🅰️ **Alfa Pay** / 🟢 **Mir Pay**\n"
+        "• 🟣 **ЮMoney**\n\n"
+        "Выберите пакет:"
     )
-    kb = types.InlineKeyboardMarkup()
+    kb = types.InlineKeyboardMarkup(row_width=2)
     for pid, p in PACKAGES.items():
         kb.row(types.InlineKeyboardButton(f"{p['title']} — {p['rub']} ₽ ({p['badge']})", callback_data=f"buy_{pid}"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
@@ -434,25 +500,49 @@ def on_buy_package(c):
     if not pkg: return
     
     uid = c.message.chat.id
-    # 1. Прямая современная форма ЮMoney (где открывается экран со всеми кнопками)
-    direct_to_url = f"https://yoomoney.ru/to/{YOOMONEY_RECEIVER}/{pkg['rub']}"
+    bot.answer_callback_query(c.id, "⏳ Создаём защищённую страницу оплаты ЮKassa...")
     
-    # 2. Форма quickpay со всеми способами
-    quickpay_url = f"https://yoomoney.ru/quickpay/confirm.xml?receiver={YOOMONEY_RECEIVER}&quickpay-form=shop&targets=GenCalls+{pkg['title']}+(ID+{uid})&paymentType=AC&sum={pkg['rub']}&label=gencalls_{uid}"
+    success, pay_url, payment_id = create_yookassa_payment(pkg["rub"], uid, pkg["title"])
+    
+    if not success or not pay_url:
+        # Резервная ссылка, если API вернул ошибку
+        pay_url = f"https://yoomoney.ru/to/{YOOKASSA_SHOP_ID}/{pkg['rub']}"
+        payment_id = f"fallback_{int(time.time())}"
 
     text = (
-        f"📦 **Выбран пакет: {pkg['title']} ({pkg['rub']} ₽)**\n\n"
-        f"👇 **Выберите удобный способ оплаты:**\n"
-        f"• **Способ 1:** Нажмите кнопку **«⚡ Оплатить через СБП / SberPay»**\n"
-        f"• **Способ 2:** Оплата картой любого банка (МИР/Visa/MC)\n\n"
-        f"🆔 Ваш ID для зачисления: `{uid}`"
+        f"📦 **Заказ: {pkg['title']} ({pkg['rub']} ₽)**\n\n"
+        f"✅ Страница оплаты ЮKassa сформирована!\n"
+        f"На ней доступны: **SberPay, СБП, Банковские карты, Alfa Pay, Mir Pay, ЮMoney**.\n\n"
+        f"👇 Нажмите кнопку ниже для перехода к оплате:"
     )
     kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton(f"⚡ Оплатить {pkg['rub']} ₽ (СБП / SberPay / Карты)", url=direct_to_url))
-    kb.row(types.InlineKeyboardButton(f"💳 Альтернативная форма ({pkg['rub']} ₽)", url=quickpay_url))
-    kb.row(types.InlineKeyboardButton("👨‍💻 Поддержка / Ручное зачисление", url=f"https://t.me/{SUPPORT_USERNAME}"))
+    kb.row(types.InlineKeyboardButton(f"💳 Перейти к оплате {pkg['rub']} ₽ (ЮKassa)", url=pay_url))
+    kb.row(types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_yk_{payment_id}_{pkg['rub']}"))
     kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
     safe_nav(c, text, reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("check_yk_"))
+def on_check_yk_pay(c):
+    parts = c.data.split("_")
+    payment_id = parts[2]
+    amount = int(parts[3])
+    uid = c.message.chat.id
+    
+    bot.answer_callback_query(c.id, "⏳ Проверяем платёж в ЮKassa...")
+    
+    status, paid, _ = check_yookassa_payment(payment_id)
+    
+    if paid or status == "succeeded":
+        u = get_user(uid)
+        u["balance_rub"] = u.get("balance_rub", 0) + amount
+        save_json(DB_FILE, db)
+        safe_nav(c, f"🎉 **Оплата подтверждена ЮKassa!**\n\nВам начислено: **+{amount} ₽**!\nТекущий баланс: **{u['balance_rub']} ₽** ({u['balance_rub'] // CALL_PRICE_RUB} 📞)", reply_markup=kb_main_menu(uid))
+    else:
+        kb = types.InlineKeyboardMarkup()
+        kb.row(types.InlineKeyboardButton("🔄 Повторить проверку", callback_data=c.data))
+        kb.row(types.InlineKeyboardButton("👨‍💻 Написать в поддержку", url=f"https://t.me/{SUPPORT_USERNAME}"))
+        kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+        safe_nav(c, f"⏳ **Платёж пока не завершён (Статус: {status})**\n\nЕсли вы только что оплатили — подождите 30 секунд и нажмите «Повторить проверку».", reply_markup=kb)
 
 # ---- КАБИНЕТ, ПОДДЕРЖКА, ПРОМОКОДЫ, ПАРТНЁРКА ----
 @bot.callback_query_handler(func=lambda c: c.data == "nav_account")
@@ -483,7 +573,7 @@ def cb_support(c):
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("👨‍💻 Написать создателю", url=f"https://t.me/{SUPPORT_USERNAME}"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
-    safe_nav(c, "🛟 **Служба поддержки:**\nЕсли возникли вопросы по оплате или звонкам, напишите нам.", reply_markup=kb)
+    safe_nav(c, "🛟 **Служба поддержки:**\nЕсли возникли вопросы, напишите напрямую создателю бота.", reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data == "nav_affiliate")
 def cb_affiliate(c):
@@ -561,17 +651,17 @@ def cb_admin_panel(c):
 def show_admin_panel(chat_id, c=None):
     total_calls = sum(len(u.get("calls_history", [])) for u in db.values())
     total_rub = sum(u.get("balance_rub", 0) for u in db.values())
-    receiver = admin_cfg.get("yoomoney_receiver", YOOMONEY_RECEIVER)
+    shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
     
     text = (
         "👑 **Панель Администратора Пранк-Бота**\n\n"
         f"👤 Ваш ID: `{chat_id}` (Гл. Администратор)\n"
-        f"💳 Кошелёк ЮKassa/ЮMoney: `{receiver}`\n"
+        f"💳 ЮKassa ShopID: `{shop_id}`\n"
         f"👥 Пользователей: **{len(db)}**\n"
         f"📞 Звонков совершено: **{total_calls}**\n"
         f"💰 Баланс пользователей: **{total_rub} ₽**\n"
         f"🏷️ Цена звонка: **{CALL_PRICE_RUB} ₽**\n"
-        f"⚡ Платежи: **СБП, SberPay, Карты, ЮMoney**"
+        f"⚡ Платежи: **Официальный виджет ЮKassa**"
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(types.InlineKeyboardButton("🧪 Проверить статус шлюзов", callback_data="adm_check_services"))
@@ -613,7 +703,7 @@ def on_check_services(c):
         "🧪 **Статус сервисов телефонии:**\n\n"
         f"1. 🇷🇺 **Zvonok (+7 РФ):** {z_status}\n"
         f"2. 🌍 **SMS.RU (+374 Армения / Мир):** {s_status}\n"
-        f"3. 💳 **ЮMoney/СБП:** Активен (`{YOOMONEY_RECEIVER}`)"
+        f"3. 💳 **ЮKassa API:** Подключен (Shop `{YOOKASSA_SHOP_ID}`)"
     )
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_panel_open"))
@@ -678,7 +768,7 @@ def step_adm_broadcast(m):
     bot.reply_to(m, f"✅ Рассылка доставлена: {sent} пользователям.")
     show_admin_panel(m.chat.id)
 
-print("\n>>> ПРАНК-БОТ GENCALLS (СБП / ЮKASSA) УСПЕШНО ЗАПУЩЕН! <<<")
+print("\n>>> ПРАНК-БОТ GENCALLS (ОФИЦИАЛЬНАЯ ЮKASSA) УСПЕШНО ЗАПУЩЕН! <<<")
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
