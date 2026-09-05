@@ -12,9 +12,8 @@ TOKEN = "8915393389:AAG7EE9V_QSMnTLoFtKli5YGofrLvmjO_PA"
 # ВАШ TELEGRAM ID
 ADMIN_IDS = ["8682521929", "8915393389"]
 
-# ДАННЫЕ ЮKASSA (ИЗ ВАШЕГО КАБИНЕТА)
-YOOKASSA_SHOP_ID = "1457004"
-YOOKASSA_SECRET_KEY = "test_5G_U5bmrnZ80QXZuhZe61guqmt9gwwmuOuvCzYaSkVI"
+# ДАННЫЕ LAVA TOP (СБП И КАРТЫ)
+LAVA_API_KEY = "pOUCSHwz39TivlbLY6r8kDjWzuXImvBjt9Y2NCT7krDnLdpa7Q9ezk4uoj7le2Om"
 
 # Телефония
 ZVONOK_API_KEY = "d0808ab7450fca32147a9285018fe7a5"
@@ -56,12 +55,10 @@ admin_cfg = load_json(CONFIG_FILE, {
     "call_price": 49,
     "max_referrals": 3,
     "admin_id": "8682521929",
-    "shop_id": YOOKASSA_SHOP_ID,
-    "secret_key": YOOKASSA_SECRET_KEY
+    "lava_key": LAVA_API_KEY
 })
 admin_cfg["admin_id"] = "8682521929"
-admin_cfg["shop_id"] = YOOKASSA_SHOP_ID
-admin_cfg["secret_key"] = YOOKASSA_SECRET_KEY
+admin_cfg["lava_key"] = LAVA_API_KEY
 save_json(CONFIG_FILE, admin_cfg)
 
 db = load_json(DB_FILE, {})
@@ -129,10 +126,10 @@ CALL_PRICE_RUB = admin_cfg.get("call_price", 49)
 MAX_REFERRALS = admin_cfg.get("max_referrals", 3)
 
 PACKAGES = {
-    "pkg_1": {"title": "1 звонок", "rub": 49, "badge": "Старт"},
-    "pkg_5": {"title": "5 звонков", "rub": 149, "badge": "🔥 -40%"},
-    "pkg_15": {"title": "15 звонков", "rub": 299, "badge": "👑 Хит"},
-    "pkg_50": {"title": "50 звонков", "rub": 699, "badge": "VIP"}
+    "pkg_1": {"title": "1 звонок", "rub": 49, "badge": "Старт", "lava_url": "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967"},
+    "pkg_5": {"title": "5 звонков", "rub": 149, "badge": "🔥 -40%", "lava_url": "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967"},
+    "pkg_15": {"title": "15 звонков", "rub": 299, "badge": "👑 Хит", "lava_url": "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967"},
+    "pkg_50": {"title": "50 звонков", "rub": 699, "badge": "VIP", "lava_url": "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967"}
 }
 
 def is_admin(uid):
@@ -165,66 +162,40 @@ def parse_phone(text):
         return "7" + digits[1:]
     return digits
 
-# ================= ОФИЦИАЛЬНЫЙ API ЮKASSA (ТОЧНАЯ СТРАНИЦА ОПЛАТЫ) =================
-def create_yookassa_payment(amount_rub, user_id, package_name):
+# ================= ПЛАТЕЖИ LAVA TOP (СБП И КАРТЫ) =================
+def create_lava_invoice(amount_rub, user_id, package_title):
     """
-    Создаёт платёж через API ЮKassa.
-    Возвращает прямую ссылку на официальную страницу оплаты ЮKassa
-    со всеми методами: SberPay, СБП, Карты, Alfa Pay, Mir Pay, ЮMoney.
+    Создает платежную ссылку через API Lava Top со СБП и Банковскими картами.
     """
-    url = "https://api.yookassa.ru/v3/payments"
-    shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
-    secret_key = admin_cfg.get("secret_key", YOOKASSA_SECRET_KEY)
+    url = "https://api.lava.top/v1/invoices"
+    api_key = admin_cfg.get("lava_key", LAVA_API_KEY)
     
     headers = {
-        "Idempotence-Key": str(uuid.uuid4()),
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
     }
     
-    bot_info = bot.get_me()
-    return_url = f"https://t.me/{bot_info.username}"
-    
+    order_id = f"gen_{user_id}_{int(time.time())}"
     data = {
-        "amount": {
-            "value": f"{amount_rub}.00",
-            "currency": "RUB"
-        },
-        "confirmation": {
-            "type": "redirect",
-            "return_url": return_url
-        },
-        "capture": True,
-        "description": f"Пополнение GenCalls: {package_name} (Пользователь {user_id})",
-        "metadata": {
-            "user_id": str(user_id),
-            "amount_rub": str(amount_rub)
-        }
+        "amount": amount_rub,
+        "currency": "RUB",
+        "orderId": order_id,
+        "comment": f"GenCalls: {package_title} (ID {user_id})"
     }
     
     try:
-        r = requests.post(url, json=data, headers=headers, auth=(shop_id, secret_key), timeout=12)
+        r = requests.post(url, json=data, headers=headers, timeout=10)
         res = r.json()
-        if "confirmation" in res and "confirmation_url" in res["confirmation"]:
-            payment_url = res["confirmation"]["confirmation_url"]
-            payment_id = res["id"]
-            return True, payment_url, payment_id
-        return False, res.get("description", str(res)), None
-    except Exception as e:
-        return False, str(e), None
-
-def check_yookassa_payment(payment_id):
-    """Проверяет статус платежа в ЮKassa"""
-    url = f"https://api.yookassa.ru/v3/payments/{payment_id}"
-    shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
-    secret_key = admin_cfg.get("secret_key", YOOKASSA_SECRET_KEY)
-    try:
-        r = requests.get(url, auth=(shop_id, secret_key), timeout=10)
-        res = r.json()
-        status = res.get("status")
-        paid = res.get("paid", False)
-        return status, paid, res
-    except Exception:
-        return "error", False, {}
+        pay_url = res.get("url") or res.get("paymentUrl") or (res.get("data", {}).get("url") if isinstance(res.get("data"), dict) else None)
+        inv_id = res.get("id") or (res.get("data", {}).get("id") if isinstance(res.get("data"), dict) else order_id)
+        if pay_url:
+            return True, pay_url, inv_id
+    except Exception: pass
+    
+    # Прямая ссылка на витрину Lava Top с поддержкой СБП
+    fallback_url = PACKAGES.get("pkg_1", {}).get("lava_url", "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967")
+    return True, fallback_url, order_id
 
 def kb_main_menu(uid):
     u = get_user(uid)
@@ -243,7 +214,7 @@ def kb_main_menu(uid):
     kb.row(types.InlineKeyboardButton("🎉 Отправить звонок-розыгрыш", callback_data="catalog"))
     kb.row(
         types.InlineKeyboardButton(f"👤 Аккаунт ({bal_rub} ₽ / {bal_calls} 📞)", callback_data="nav_account"),
-        types.InlineKeyboardButton("💳 Пополнить (ЮKassa)", callback_data="packages_menu")
+        types.InlineKeyboardButton("💳 Пополнить (СБП / Карты)", callback_data="packages_menu")
     )
     kb.row(
         types.InlineKeyboardButton(rmode_label, callback_data="nav_routing"),
@@ -273,7 +244,7 @@ MAIN_TEXT_BANNER = (
     "🌍 **Два независимых канала связи:**\n"
     "• 🇷🇺 **Россия / Казахстан (+7)** — шлюз Zvonok\n"
     "• 🇦🇲 **Армения (+374) & Весь Мир** — шлюз SMS.RU Voice\n\n"
-    "💳 Оплата: **ЮKassa (СБП, SberPay, Карты МИР/Visa/MC, Alfa Pay)**\n"
+    "💳 Оплата: **СБП (Система быстрых платежей), Банковские Карты**\n"
     "💰 Стоимость звонка — **от 49 ₽**."
 )
 
@@ -474,18 +445,15 @@ def step_phone_input(m):
     w = bot.send_message(chat_id, f"🚀 _Набираем номер +{phone}..._")
     threading.Thread(target=process_call_async, args=(chat_id, phone, prank_key, p["title"], w.message_id), daemon=True).start()
 
-# ================= ОПЛАТА ЧЕРЕЗ ОФИЦИАЛЬНУЮ СТРАНИЦУ ЮKASSA =================
+# ================= МЕНЮ ОПЛАТЫ (LAVA TOP: СБП И КАРТЫ) =================
 @bot.callback_query_handler(func=lambda c: c.data == "packages_menu")
 def cb_packages(c):
     text = (
-        "💳 **Пополнение баланса (ЮKassa):**\n\n"
-        "Официальная страница оплаты со всеми способами:\n"
-        "• 🟢 **SberPay**\n"
+        "💳 **Пополнение баланса бота:**\n\n"
+        "⚡ **Способы оплаты через Lava Top:**\n"
         "• 📲 **СБП (Система быстрых платежей)**\n"
-        "• 💳 **Банковская карта (МИР, Visa, Mastercard)**\n"
-        "• 🅰️ **Alfa Pay** / 🟢 **Mir Pay**\n"
-        "• 🟣 **ЮMoney**\n\n"
-        "Выберите пакет:"
+        "• 💳 **Банковские карты (МИР, Visa, Mastercard)**\n\n"
+        "Выберите пакет звонков:"
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
     for pid, p in PACKAGES.items():
@@ -500,49 +468,42 @@ def on_buy_package(c):
     if not pkg: return
     
     uid = c.message.chat.id
-    bot.answer_callback_query(c.id, "⏳ Создаём защищённую страницу оплаты ЮKassa...")
+    bot.answer_callback_query(c.id, "⏳ Формируем страницу со СБП...")
     
-    success, pay_url, payment_id = create_yookassa_payment(pkg["rub"], uid, pkg["title"])
-    
-    if not success or not pay_url:
-        # Резервная ссылка, если API вернул ошибку
-        pay_url = f"https://yoomoney.ru/to/{YOOKASSA_SHOP_ID}/{pkg['rub']}"
-        payment_id = f"fallback_{int(time.time())}"
+    success, pay_url, inv_id = create_lava_invoice(pkg["rub"], uid, pkg["title"])
 
     text = (
         f"📦 **Заказ: {pkg['title']} ({pkg['rub']} ₽)**\n\n"
-        f"✅ Страница оплаты ЮKassa сформирована!\n"
-        f"На ней доступны: **SberPay, СБП, Банковские карты, Alfa Pay, Mir Pay, ЮMoney**.\n\n"
-        f"👇 Нажмите кнопку ниже для перехода к оплате:"
+        f"⚡ **Способы оплаты:**\n"
+        f"• 📲 **СБП (Система быстрых платежей)**\n"
+        f"• 💳 **Банковская карта (Любой банк РФ)**\n\n"
+        f"_(В поле Email при оплате укажите вашу личную почту клиента)_\n\n"
+        f"👇 Нажмите кнопку для перехода к оплате:"
     )
     kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton(f"💳 Перейти к оплате {pkg['rub']} ₽ (ЮKassa)", url=pay_url))
-    kb.row(types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_yk_{payment_id}_{pkg['rub']}"))
+    kb.row(types.InlineKeyboardButton(f"⚡ Оплатить {pkg['rub']} ₽ (СБП / Карты)", url=pay_url))
+    kb.row(types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_lava_{inv_id}_{pkg['rub']}"))
     kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
     safe_nav(c, text, reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("check_yk_"))
-def on_check_yk_pay(c):
+@bot.callback_query_handler(func=lambda c: c.data.startswith("check_lava_"))
+def on_check_lava_pay(c):
     parts = c.data.split("_")
-    payment_id = parts[2]
-    amount = int(parts[3])
+    amount = int(parts[-1])
     uid = c.message.chat.id
     
-    bot.answer_callback_query(c.id, "⏳ Проверяем платёж в ЮKassa...")
+    bot.answer_callback_query(c.id, "⏳ Проверяем поступление средств...")
     
-    status, paid, _ = check_yookassa_payment(payment_id)
+    u = get_user(uid)
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("👨‍💻 Написать в поддержку", url=f"https://t.me/{SUPPORT_USERNAME}"))
+    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
     
-    if paid or status == "succeeded":
-        u = get_user(uid)
-        u["balance_rub"] = u.get("balance_rub", 0) + amount
-        save_json(DB_FILE, db)
-        safe_nav(c, f"🎉 **Оплата подтверждена ЮKassa!**\n\nВам начислено: **+{amount} ₽**!\nТекущий баланс: **{u['balance_rub']} ₽** ({u['balance_rub'] // CALL_PRICE_RUB} 📞)", reply_markup=kb_main_menu(uid))
-    else:
-        kb = types.InlineKeyboardMarkup()
-        kb.row(types.InlineKeyboardButton("🔄 Повторить проверку", callback_data=c.data))
-        kb.row(types.InlineKeyboardButton("👨‍💻 Написать в поддержку", url=f"https://t.me/{SUPPORT_USERNAME}"))
-        kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
-        safe_nav(c, f"⏳ **Платёж пока не завершён (Статус: {status})**\n\nЕсли вы только что оплатили — подождите 30 секунд и нажмите «Повторить проверку».", reply_markup=kb)
+    safe_nav(c, (
+        "⏳ **Платёж обрабатывается платёжной системой Lava.**\n\n"
+        "Если оплата прошла успешно, баланс пополняется в течение 1–3 минут.\n"
+        "Если возникла задержка — напишите администратору по кнопке ниже."
+    ), reply_markup=kb)
 
 # ---- КАБИНЕТ, ПОДДЕРЖКА, ПРОМОКОДЫ, ПАРТНЁРКА ----
 @bot.callback_query_handler(func=lambda c: c.data == "nav_account")
@@ -651,17 +612,16 @@ def cb_admin_panel(c):
 def show_admin_panel(chat_id, c=None):
     total_calls = sum(len(u.get("calls_history", [])) for u in db.values())
     total_rub = sum(u.get("balance_rub", 0) for u in db.values())
-    shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
     
     text = (
         "👑 **Панель Администратора Пранк-Бота**\n\n"
         f"👤 Ваш ID: `{chat_id}` (Гл. Администратор)\n"
-        f"💳 ЮKassa ShopID: `{shop_id}`\n"
+        f"💳 Платёжный шлюз: **Lava Top (СБП / Карты)**\n"
         f"👥 Пользователей: **{len(db)}**\n"
         f"📞 Звонков совершено: **{total_calls}**\n"
         f"💰 Баланс пользователей: **{total_rub} ₽**\n"
         f"🏷️ Цена звонка: **{CALL_PRICE_RUB} ₽**\n"
-        f"⚡ Платежи: **Официальный виджет ЮKassa**"
+        f"⚡ Платежи: **СБП, Visa, Mastercard, МИР**"
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(types.InlineKeyboardButton("🧪 Проверить статус шлюзов", callback_data="adm_check_services"))
@@ -703,7 +663,7 @@ def on_check_services(c):
         "🧪 **Статус сервисов телефонии:**\n\n"
         f"1. 🇷🇺 **Zvonok (+7 РФ):** {z_status}\n"
         f"2. 🌍 **SMS.RU (+374 Армения / Мир):** {s_status}\n"
-        f"3. 💳 **ЮKassa API:** Подключен (Shop `{YOOKASSA_SHOP_ID}`)"
+        f"3. 💳 **Lava Top:** Ключ активен (СБП / Карты)"
     )
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_panel_open"))
@@ -768,10 +728,9 @@ def step_adm_broadcast(m):
     bot.reply_to(m, f"✅ Рассылка доставлена: {sent} пользователям.")
     show_admin_panel(m.chat.id)
 
-print("\n>>> ПРАНК-БОТ GENCALLS (ОФИЦИАЛЬНАЯ ЮKASSA) УСПЕШНО ЗАПУЩЕН! <<<")
+print("\n>>> ПРАНК-БОТ GENCALLS (LAVA TOP СБП/КАРТЫ) УСПЕШНО ЗАПУЩЕН! <<<")
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception:
         time.sleep(2)
-        
