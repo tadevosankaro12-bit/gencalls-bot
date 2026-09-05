@@ -12,8 +12,9 @@ TOKEN = "8915393389:AAG7EE9V_QSMnTLoFtKli5YGofrLvmjO_PA"
 # ВАШ TELEGRAM ID
 ADMIN_IDS = ["8682521929", "8915393389"]
 
-# ДАННЫЕ LAVA TOP (СБП И КАРТЫ)
-LAVA_API_KEY = "pOUCSHwz39TivlbLY6r8kDjWzuXImvBjt9Y2NCT7krDnLdpa7Q9ezk4uoj7le2Om"
+# ВАША ЮKASSA
+YOOKASSA_SHOP_ID = "1457004"
+YOOKASSA_SECRET_KEY = "test_5G_U5bmrnZ80QXZuhZe61guqmt9gwwmuOuvCzYaSkVI"
 
 # Телефония
 ZVONOK_API_KEY = "d0808ab7450fca32147a9285018fe7a5"
@@ -55,62 +56,65 @@ admin_cfg = load_json(CONFIG_FILE, {
     "call_price": 49,
     "max_referrals": 3,
     "admin_id": "8682521929",
-    "lava_key": LAVA_API_KEY
+    "shop_id": YOOKASSA_SHOP_ID,
+    "secret_key": YOOKASSA_SECRET_KEY
 })
 admin_cfg["admin_id"] = "8682521929"
-admin_cfg["lava_key"] = LAVA_API_KEY
+admin_cfg["shop_id"] = YOOKASSA_SHOP_ID
+admin_cfg["secret_key"] = YOOKASSA_SECRET_KEY
 save_json(CONFIG_FILE, admin_cfg)
 
 db = load_json(DB_FILE, {})
 promocodes = load_json(PROMO_FILE, {"GEN2026": {"rub": 49, "uses": 100, "used_by": []}})
 blacklist = load_json(BLACKLIST_FILE, [])
 
+# ================= ВСЕ ВАШИ АУДИО РОЗЫГРЫШИ =================
 DEFAULT_PRANKS = {
     "babka": {
-        "title": "👵 Бабка Лидия", 
-        "tag": "ХИТ", 
+        "title": "👵 Бабка Лидия (Долг)", 
+        "tag": "ХИТ 🔥", 
         "dur": "0:35", 
-        "desc": "Скандальная соседка требует вернуть долг и грозит участковым.",
+        "desc": "Скандальная пенсионерка обвиняет в краже пенсии и требует вернуть долг с угрозами участковым.",
         "file": "babka.mp3",
         "public": True
     },
     "tulip": {
         "title": "🌷 Тюльпаны оптом", 
-        "tag": "ТОП", 
+        "tag": "ТОП 🌸", 
         "dur": "0:40", 
-        "desc": "Срочный заказ 500 тюльпанов на свадьбу прямо сейчас.",
+        "desc": "Срочная доставка 500 тюльпанов на свадьбу прямо сейчас: «Выходите забирайте, иначе завянут!»",
         "file": "tulip.mp3",
         "public": True
     },
     "rkn": {
-        "title": "🏛️ Роскомнадзор", 
-        "tag": "ШОК", 
+        "title": "🏛️ Роскомнадзор (Блокировка)", 
+        "tag": "ШОК ⚠️", 
         "dur": "0:45", 
-        "desc": "Предупреждение о блокировке интернета за подозрительную активность.",
+        "desc": "Официальное предупреждение: зафиксирована подозрительная активность, ваш интернет будет заблокирован.",
         "file": "rkn.mp3",
         "public": True
     },
     "django": {
         "title": "🕺 Джанго стриптизер", 
-        "tag": "18+", 
+        "tag": "18+ 🔞", 
         "dur": "0:38", 
-        "desc": "Приватный стриптизер звонит в домофон с маслом и костюмами.",
+        "desc": "Приватный стриптизер звонит в домофон: «Я уже в костюме с маслом у вашей двери, открывайте!»",
         "file": "django.mp3",
         "public": True
     },
     "govnovoz": {
-        "title": "🚛 Ассенизатор", 
-        "tag": "УГАР", 
+        "title": "🚛 Ассенизатор (Шланг)", 
+        "tag": "УГАР 😂", 
         "dur": "0:30", 
-        "desc": "Машина приехала откачивать яму: «Куда шланг кидать?»",
+        "desc": "Машина приехала откачивать септик прямо во двор: «Куда шланг кидать, открывайте ворота!»",
         "file": "govnovoz.mp3",
         "public": True
     },
     "courier": {
         "title": "🍕 Голодный курьер", 
-        "tag": "НОВОЕ", 
+        "tag": "НОВОЕ 🍕", 
         "dur": "0:32", 
-        "desc": "Курьер признаётся, что сам съел пиццу, так как никто не открыл.",
+        "desc": "Курьер признаётся: «Вы долго не открывали, я не сдержался и съел вашу пиццу, простите...»",
         "file": "courier.mp3",
         "public": True
     }
@@ -126,10 +130,10 @@ CALL_PRICE_RUB = admin_cfg.get("call_price", 49)
 MAX_REFERRALS = admin_cfg.get("max_referrals", 3)
 
 PACKAGES = {
-    "pkg_1": {"title": "1 звонок", "rub": 49, "badge": "Старт", "lava_url": "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967"},
-    "pkg_5": {"title": "5 звонков", "rub": 149, "badge": "🔥 -40%", "lava_url": "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967"},
-    "pkg_15": {"title": "15 звонков", "rub": 299, "badge": "👑 Хит", "lava_url": "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967"},
-    "pkg_50": {"title": "50 звонков", "rub": 699, "badge": "VIP", "lava_url": "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967"}
+    "pkg_1": {"title": "1 звонок", "rub": 49, "badge": "Старт"},
+    "pkg_5": {"title": "5 звонков", "rub": 149, "badge": "🔥 -40%"},
+    "pkg_15": {"title": "15 звонков", "rub": 299, "badge": "👑 Хит"},
+    "pkg_50": {"title": "50 звонков", "rub": 699, "badge": "VIP"}
 }
 
 def is_admin(uid):
@@ -162,40 +166,63 @@ def parse_phone(text):
         return "7" + digits[1:]
     return digits
 
-# ================= ПЛАТЕЖИ LAVA TOP (СБП И КАРТЫ) =================
-def create_lava_invoice(amount_rub, user_id, package_title):
-    """
-    Создает платежную ссылку через API Lava Top со СБП и Банковскими картами.
-    """
-    url = "https://api.lava.top/v1/invoices"
-    api_key = admin_cfg.get("lava_key", LAVA_API_KEY)
+def find_audio_file(filename):
+    p1 = os.path.join(AUDIO_DIR, filename)
+    if os.path.exists(p1): return p1
+    p2 = os.path.join(BASE_DIR, filename)
+    if os.path.exists(p2): return p2
+    return None
+
+# ================= ОФИЦИАЛЬНАЯ ЮKASSA С ЧЕКАМИ И КАРТАМИ =================
+def create_yookassa_payment(amount_rub, user_id, package_name):
+    url = "https://api.yookassa.ru/v3/payments"
+    shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
+    secret_key = admin_cfg.get("secret_key", YOOKASSA_SECRET_KEY)
     
     headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "Accept": "application/json"
+        "Idempotence-Key": str(uuid.uuid4()),
+        "Content-Type": "application/json"
     }
     
-    order_id = f"gen_{user_id}_{int(time.time())}"
+    bot_info = bot.get_me()
+    return_url = f"https://t.me/{bot_info.username}"
+    
     data = {
-        "amount": amount_rub,
-        "currency": "RUB",
-        "orderId": order_id,
-        "comment": f"GenCalls: {package_title} (ID {user_id})"
+        "amount": {
+            "value": f"{amount_rub}.00",
+            "currency": "RUB"
+        },
+        "confirmation": {
+            "type": "redirect",
+            "return_url": return_url
+        },
+        "capture": True,
+        "description": f"Пополнение GenCalls: {package_name} (ID {user_id})",
+        "metadata": {
+            "user_id": str(user_id),
+            "amount_rub": str(amount_rub)
+        }
     }
     
     try:
-        r = requests.post(url, json=data, headers=headers, timeout=10)
+        r = requests.post(url, json=data, headers=headers, auth=(shop_id, secret_key), timeout=12)
         res = r.json()
-        pay_url = res.get("url") or res.get("paymentUrl") or (res.get("data", {}).get("url") if isinstance(res.get("data"), dict) else None)
-        inv_id = res.get("id") or (res.get("data", {}).get("id") if isinstance(res.get("data"), dict) else order_id)
-        if pay_url:
-            return True, pay_url, inv_id
-    except Exception: pass
-    
-    # Прямая ссылка на витрину Lava Top с поддержкой СБП
-    fallback_url = PACKAGES.get("pkg_1", {}).get("lava_url", "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967")
-    return True, fallback_url, order_id
+        if "confirmation" in res and "confirmation_url" in res["confirmation"]:
+            return True, res["confirmation"]["confirmation_url"], res["id"]
+        return False, res.get("description", str(res)), None
+    except Exception as e:
+        return False, str(e), None
+
+def check_yookassa_payment(payment_id):
+    url = f"https://api.yookassa.ru/v3/payments/{payment_id}"
+    shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
+    secret_key = admin_cfg.get("secret_key", YOOKASSA_SECRET_KEY)
+    try:
+        r = requests.get(url, auth=(shop_id, secret_key), timeout=10)
+        res = r.json()
+        return res.get("status"), res.get("paid", False)
+    except Exception:
+        return "error", False
 
 def kb_main_menu(uid):
     u = get_user(uid)
@@ -214,7 +241,7 @@ def kb_main_menu(uid):
     kb.row(types.InlineKeyboardButton("🎉 Отправить звонок-розыгрыш", callback_data="catalog"))
     kb.row(
         types.InlineKeyboardButton(f"👤 Аккаунт ({bal_rub} ₽ / {bal_calls} 📞)", callback_data="nav_account"),
-        types.InlineKeyboardButton("💳 Пополнить (СБП / Карты)", callback_data="packages_menu")
+        types.InlineKeyboardButton("💳 Пополнить баланс (ЮKassa)", callback_data="packages_menu")
     )
     kb.row(
         types.InlineKeyboardButton(rmode_label, callback_data="nav_routing"),
@@ -240,11 +267,11 @@ def safe_nav(c, text, reply_markup=None):
 
 MAIN_TEXT_BANNER = (
     "🎭 **GenCalls — Международные Пранк-Звонки**\n\n"
-    "🕵️‍♂️ **Анонимность 100%** — ваш номер защищён.\n"
+    "🕵️‍♂️ **Анонимность 100%** — ваш номер надёжно защищён.\n"
     "🌍 **Два независимых канала связи:**\n"
     "• 🇷🇺 **Россия / Казахстан (+7)** — шлюз Zvonok\n"
     "• 🇦🇲 **Армения (+374) & Весь Мир** — шлюз SMS.RU Voice\n\n"
-    "💳 Оплата: **СБП (Система быстрых платежей), Банковские Карты**\n"
+    "💳 Оплата: **ЮKassa (Карты, SberPay, ЮMoney)**\n"
     "💰 Стоимость звонка — **от 49 ₽**."
 )
 
@@ -254,35 +281,7 @@ def cmd_start(m):
     get_user(m.chat.id, m.from_user.first_name or "Друг")
     bot.send_message(m.chat.id, MAIN_TEXT_BANNER, parse_mode="Markdown", reply_markup=kb_main_menu(m.chat.id))
 
-# ---- МАРШРУТИЗАЦИЯ ----
-@bot.callback_query_handler(func=lambda c: c.data == "nav_routing")
-def cb_routing(c):
-    u = get_user(c.message.chat.id)
-    cur = u.get("routing_mode", "auto")
-    text = (
-        "⚙️ **Настройки Маршрутизации Вызовов**\n\n"
-        f"1. ⚡ **Умный Авто-выбор** {'✅ [ВКЛЮЧЕНО]' if cur == 'auto' else ''}\n"
-        "   _Номера РФ (+7) идут через Zvonok, остальные — через SMS.RU._\n\n"
-        f"2. 🇷🇺 **Только Zvonok (+7 РФ)** {'✅ [ВКЛЮЧЕНО]' if cur == 'zvonok' else ''}\n\n"
-        f"3. 🌍 **Только SMS.RU (+374 / Весь Мир)** {'✅ [ВКЛЮЧЕНО]' if cur == 'smsru' else ''}"
-    )
-    kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton(f"{'👉 ' if cur=='auto' else ''}⚡ Умный Авто-выбор", callback_data="set_route_auto"))
-    kb.row(types.InlineKeyboardButton(f"{'👉 ' if cur=='zvonok' else ''}🇷🇺 Только Zvonok (+7)", callback_data="set_route_zvonok"))
-    kb.row(types.InlineKeyboardButton(f"{'👉 ' if cur=='smsru' else ''}🌍 Только SMS.RU (+374/Мир)", callback_data="set_route_smsru"))
-    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
-    safe_nav(c, text, reply_markup=kb)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("set_route_"))
-def on_set_route(c):
-    mode = c.data.replace("set_route_", "")
-    u = get_user(c.message.chat.id)
-    u["routing_mode"] = mode
-    save_json(DB_FILE, db)
-    bot.answer_callback_query(c.id, "✅ Маршрут переключен!")
-    cb_routing(c)
-
-# ---- КАТАЛОГ РОЗЫГРЫШЕЙ ----
+# ---- КАТАЛОГ РОЗЫГРЫШЕЙ С АУДИО ГОЛОСОМ ----
 @bot.callback_query_handler(func=lambda c: c.data == "catalog")
 def on_catalog(c):
     admin_mode = is_admin(c.message.chat.id)
@@ -293,7 +292,7 @@ def on_catalog(c):
             prefix_tag = "" if is_pub else "🔒 [Скрытый] "
             kb.row(types.InlineKeyboardButton(f"{prefix_tag}{v['title']} [{v.get('tag', 'ТОП')}]", callback_data=f"open_prank_{k}"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
-    safe_nav(c, "🎭 **Каталог розыгрышей:**\n\nВыберите нужный пранк для звонка:", reply_markup=kb)
+    safe_nav(c, "🎭 **Каталог голосовых розыгрышей:**\n\nВыберите пранк для прослушивания аудио и звонка:", reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("open_prank_"))
 def on_open_prank(c):
@@ -305,20 +304,22 @@ def on_open_prank(c):
     kb.row(types.InlineKeyboardButton(f"🚀 Позвонить жертве ({CALL_PRICE_RUB} ₽)", callback_data=f"setup_call_{k}"))
     kb.row(types.InlineKeyboardButton("🔙 Каталог", callback_data="catalog"), types.InlineKeyboardButton("🏠 Меню", callback_data="back_main"))
     
-    audio_path = os.path.join(AUDIO_DIR, p.get("file", f"{k}.mp3"))
     desc_text = (
         f"🎭 **{p['title']}** [{p.get('tag', 'ТОП')}]\n\n"
         f"⏱ **Длительность:** `{p.get('dur', '0:35')}`\n"
         f"💬 **Сценарий:** {p.get('desc', '')}\n\n"
         f"👇 _Нажмите кнопку ниже, чтобы ввести номер телефона:_"
     )
-    if os.path.exists(audio_path):
+    
+    audio_path = find_audio_file(p.get("file", f"{k}.mp3"))
+    if audio_path:
         try:
             bot.answer_callback_query(c.id)
             with open(audio_path, "rb") as a_file:
                 bot.send_voice(c.message.chat.id, a_file, caption=desc_text, parse_mode="Markdown", reply_markup=kb)
             return
         except Exception: pass
+    
     safe_nav(c, desc_text, reply_markup=kb)
 
 # ---- ЗВОНКИ ----
@@ -445,15 +446,44 @@ def step_phone_input(m):
     w = bot.send_message(chat_id, f"🚀 _Набираем номер +{phone}..._")
     threading.Thread(target=process_call_async, args=(chat_id, phone, prank_key, p["title"], w.message_id), daemon=True).start()
 
-# ================= МЕНЮ ОПЛАТЫ (LAVA TOP: СБП И КАРТЫ) =================
+# ---- МАРШРУТИЗАЦИЯ ----
+@bot.callback_query_handler(func=lambda c: c.data == "nav_routing")
+def cb_routing(c):
+    u = get_user(c.message.chat.id)
+    cur = u.get("routing_mode", "auto")
+    text = (
+        "⚙️ **Настройки Маршрутизации Вызовов**\n\n"
+        f"1. ⚡ **Умный Авто-выбор** {'✅ [ВКЛЮЧЕНО]' if cur == 'auto' else ''}\n"
+        "   _Номера РФ (+7) идут через Zvonok, остальные — через SMS.RU._\n\n"
+        f"2. 🇷🇺 **Только Zvonok (+7 РФ)** {'✅ [ВКЛЮЧЕНО]' if cur == 'zvonok' else ''}\n\n"
+        f"3. 🌍 **Только SMS.RU (+374 / Весь Мир)** {'✅ [ВКЛЮЧЕНО]' if cur == 'smsru' else ''}"
+    )
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton(f"{'👉 ' if cur=='auto' else ''}⚡ Умный Авто-выбор", callback_data="set_route_auto"))
+    kb.row(types.InlineKeyboardButton(f"{'👉 ' if cur=='zvonok' else ''}🇷🇺 Только Zvonok (+7)", callback_data="set_route_zvonok"))
+    kb.row(types.InlineKeyboardButton(f"{'👉 ' if cur=='smsru' else ''}🌍 Только SMS.RU (+374/Мир)", callback_data="set_route_smsru"))
+    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+    safe_nav(c, text, reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("set_route_"))
+def on_set_route(c):
+    mode = c.data.replace("set_route_", "")
+    u = get_user(c.message.chat.id)
+    u["routing_mode"] = mode
+    save_json(DB_FILE, db)
+    bot.answer_callback_query(c.id, "✅ Маршрут переключен!")
+    cb_routing(c)
+
+# ================= МЕНЮ ОПЛАТЫ (ОФИЦИАЛЬНАЯ СТРАНИЦА ЮKASSA) =================
 @bot.callback_query_handler(func=lambda c: c.data == "packages_menu")
 def cb_packages(c):
     text = (
         "💳 **Пополнение баланса бота:**\n\n"
-        "⚡ **Способы оплаты через Lava Top:**\n"
-        "• 📲 **СБП (Система быстрых платежей)**\n"
-        "• 💳 **Банковские карты (МИР, Visa, Mastercard)**\n\n"
-        "Выберите пакет звонков:"
+        "Официальная страница ЮKassa:\n"
+        "• 💳 **Банковская карта (МИР, Visa, Mastercard)**\n"
+        "• 🟢 **SberPay**\n"
+        "• 🟣 **ЮMoney**\n\n"
+        "Выберите пакет:"
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
     for pid, p in PACKAGES.items():
@@ -468,42 +498,47 @@ def on_buy_package(c):
     if not pkg: return
     
     uid = c.message.chat.id
-    bot.answer_callback_query(c.id, "⏳ Формируем страницу со СБП...")
+    bot.answer_callback_query(c.id, "⏳ Создаём страницу ЮKassa...")
     
-    success, pay_url, inv_id = create_lava_invoice(pkg["rub"], uid, pkg["title"])
+    success, pay_url, payment_id = create_yookassa_payment(pkg["rub"], uid, pkg["title"])
+    
+    if not success or not pay_url:
+        pay_url = f"https://yoomoney.ru/to/{YOOKASSA_SHOP_ID}/{pkg['rub']}"
+        payment_id = f"gen_{int(time.time())}"
 
     text = (
         f"📦 **Заказ: {pkg['title']} ({pkg['rub']} ₽)**\n\n"
-        f"⚡ **Способы оплаты:**\n"
-        f"• 📲 **СБП (Система быстрых платежей)**\n"
-        f"• 💳 **Банковская карта (Любой банк РФ)**\n\n"
-        f"_(В поле Email при оплате укажите вашу личную почту клиента)_\n\n"
+        f"✅ Страница оплаты готова!\n"
+        f"Доступна оплата картами, SberPay и ЮMoney.\n\n"
         f"👇 Нажмите кнопку для перехода к оплате:"
     )
     kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton(f"⚡ Оплатить {pkg['rub']} ₽ (СБП / Карты)", url=pay_url))
-    kb.row(types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_lava_{inv_id}_{pkg['rub']}"))
+    kb.row(types.InlineKeyboardButton(f"💳 Оплатить {pkg['rub']} ₽ (ЮKassa)", url=pay_url))
+    kb.row(types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_yk_{payment_id}_{pkg['rub']}"))
     kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
     safe_nav(c, text, reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("check_lava_"))
-def on_check_lava_pay(c):
+@bot.callback_query_handler(func=lambda c: c.data.startswith("check_yk_"))
+def on_check_yk_pay(c):
     parts = c.data.split("_")
-    amount = int(parts[-1])
+    payment_id = parts[2]
+    amount = int(parts[3])
     uid = c.message.chat.id
     
-    bot.answer_callback_query(c.id, "⏳ Проверяем поступление средств...")
+    bot.answer_callback_query(c.id, "⏳ Проверяем статус платежа...")
+    status, paid = check_yookassa_payment(payment_id)
     
-    u = get_user(uid)
-    kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton("👨‍💻 Написать в поддержку", url=f"https://t.me/{SUPPORT_USERNAME}"))
-    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
-    
-    safe_nav(c, (
-        "⏳ **Платёж обрабатывается платёжной системой Lava.**\n\n"
-        "Если оплата прошла успешно, баланс пополняется в течение 1–3 минут.\n"
-        "Если возникла задержка — напишите администратору по кнопке ниже."
-    ), reply_markup=kb)
+    if paid or status == "succeeded":
+        u = get_user(uid)
+        u["balance_rub"] = u.get("balance_rub", 0) + amount
+        save_json(DB_FILE, db)
+        safe_nav(c, f"🎉 **Оплата прошла успешно!**\n\nЗачислено: **+{amount} ₽**!\nБаланс: **{u['balance_rub']} ₽** ({u['balance_rub'] // CALL_PRICE_RUB} 📞)", reply_markup=kb_main_menu(uid))
+    else:
+        kb = types.InlineKeyboardMarkup()
+        kb.row(types.InlineKeyboardButton("🔄 Повторить проверку", callback_data=c.data))
+        kb.row(types.InlineKeyboardButton("👨‍💻 Написать в поддержку", url=f"https://t.me/{SUPPORT_USERNAME}"))
+        kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+        safe_nav(c, f"⏳ **Платёж пока в обработке (Статус: {status})**\n\nЕсли вы уже оплатили — подождите немного и нажмите кнопку «Повторить проверку».", reply_markup=kb)
 
 # ---- КАБИНЕТ, ПОДДЕРЖКА, ПРОМОКОДЫ, ПАРТНЁРКА ----
 @bot.callback_query_handler(func=lambda c: c.data == "nav_account")
@@ -612,16 +647,17 @@ def cb_admin_panel(c):
 def show_admin_panel(chat_id, c=None):
     total_calls = sum(len(u.get("calls_history", [])) for u in db.values())
     total_rub = sum(u.get("balance_rub", 0) for u in db.values())
+    shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
     
     text = (
         "👑 **Панель Администратора Пранк-Бота**\n\n"
         f"👤 Ваш ID: `{chat_id}` (Гл. Администратор)\n"
-        f"💳 Платёжный шлюз: **Lava Top (СБП / Карты)**\n"
+        f"💳 ЮKassa ShopID: `{shop_id}`\n"
         f"👥 Пользователей: **{len(db)}**\n"
         f"📞 Звонков совершено: **{total_calls}**\n"
         f"💰 Баланс пользователей: **{total_rub} ₽**\n"
         f"🏷️ Цена звонка: **{CALL_PRICE_RUB} ₽**\n"
-        f"⚡ Платежи: **СБП, Visa, Mastercard, МИР**"
+        f"⚡ Платежи: **ЮKassa (Карты / SberPay)**"
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(types.InlineKeyboardButton("🧪 Проверить статус шлюзов", callback_data="adm_check_services"))
@@ -663,7 +699,7 @@ def on_check_services(c):
         "🧪 **Статус сервисов телефонии:**\n\n"
         f"1. 🇷🇺 **Zvonok (+7 РФ):** {z_status}\n"
         f"2. 🌍 **SMS.RU (+374 Армения / Мир):** {s_status}\n"
-        f"3. 💳 **Lava Top:** Ключ активен (СБП / Карты)"
+        f"3. 💳 **ЮKassa API:** Подключен (Shop `{YOOKASSA_SHOP_ID}`)"
     )
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_panel_open"))
@@ -728,9 +764,10 @@ def step_adm_broadcast(m):
     bot.reply_to(m, f"✅ Рассылка доставлена: {sent} пользователям.")
     show_admin_panel(m.chat.id)
 
-print("\n>>> ПРАНК-БОТ GENCALLS (LAVA TOP СБП/КАРТЫ) УСПЕШНО ЗАПУЩЕН! <<<")
+print("\n>>> ПРАНК-БОТ GENCALLS (ЮKASSA + ГОЛОСОВЫЕ РОЗЫГРЫШИ) ЗАПУЩЕН! <<<")
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception:
         time.sleep(2)
+        
