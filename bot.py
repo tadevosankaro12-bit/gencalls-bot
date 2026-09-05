@@ -14,7 +14,6 @@ ADMIN_IDS = ["8682521929", "8915393389"]
 
 # ЮKASSA
 YOOKASSA_SHOP_ID = "1457004"
-# ВНИМАНИЕ: Если хотите только реальные деньги, вставьте сюда настоящий боевой ключ live_...
 YOOKASSA_SECRET_KEY = "test_5G_U5bmrnZ80QXZuhZe61guqmt9gwwmuOuvCzYaSkVI"
 
 # Телефония
@@ -60,7 +59,7 @@ admin_cfg = load_json(CONFIG_FILE, {
     "admin_id": "8682521929",
     "shop_id": YOOKASSA_SHOP_ID,
     "secret_key": YOOKASSA_SECRET_KEY,
-    "block_test_payments": True  # БЛОКИРОВАТЬ НАКРУТКУ ТЕСТОВЫМИ ПЛАТЕЖАМИ
+    "block_test_payments": True
 })
 admin_cfg["admin_id"] = "8682521929"
 admin_cfg["shop_id"] = YOOKASSA_SHOP_ID
@@ -73,6 +72,54 @@ promocodes = load_json(PROMO_FILE, {"GEN2026": {"rub": 49, "uses": 100, "used_by
 blacklist = load_json(BLACKLIST_FILE, [])
 processed_payments = load_json(PROCESSED_PAYMENTS_FILE, [])
 
+CALL_PRICE_RUB = admin_cfg.get("call_price", 49)
+MAX_REFERRALS = admin_cfg.get("max_referrals", 3)
+
+# ================= ФУНКЦИЯ ОЧИСТКИ НАКРУЧЕННЫХ БАЛАНСОВ =================
+def clean_fake_balances():
+    """
+    Проверяет всех пользователей.
+    Списывает накрученные тестовые рубли и оставляет только честные бонусы/промокоды.
+    """
+    cleaned_users = []
+    total_stripped = 0
+    
+    for uid, u in db.items():
+        # Считаем честные поступления
+        legit_bonus = 0
+        
+        # 1. Проверяем активации промокодов
+        for p_code, p_data in promocodes.items():
+            if str(uid) in p_data.get("used_by", []):
+                legit_bonus += p_data.get("rub", 49)
+                
+        # 2. Бонусы за рефералов (+49 за каждого)
+        refs = u.get("referrals", 0)
+        legit_bonus += min(refs, MAX_REFERRALS) * 49
+        
+        # 3. Вычитаем совершенные звонки
+        calls_count = len(u.get("calls_history", []))
+        spent = calls_count * CALL_PRICE_RUB
+        
+        fair_balance = max(0, legit_bonus - spent)
+        current_balance = u.get("balance_rub", 0)
+        
+        # Если баланс накручен больше честного
+        if current_balance > fair_balance:
+            diff = current_balance - fair_balance
+            u["balance_rub"] = fair_balance
+            total_stripped += diff
+            cleaned_users.append(f"• ID `{uid}` ({u.get('name', 'Юзер')}): списано {diff} ₽ (оставлено {fair_balance} ₽)")
+            
+    if total_stripped > 0:
+        save_json(DB_FILE, db)
+        
+    return cleaned_users, total_stripped
+
+# Запуск первичной авто-зачистки при старте
+clean_fake_balances()
+
+# ================= ВСЕ АУДИО РОЗЫГРЫШИ =================
 DEFAULT_PRANKS = {
     "babka": {
         "title": "👵 Бабка Лидия (Долг)", 
@@ -130,9 +177,6 @@ for k, v in DEFAULT_PRANKS.items():
         pranks_db[k] = v
 save_json(CUSTOM_PRANKS_FILE, pranks_db)
 
-CALL_PRICE_RUB = admin_cfg.get("call_price", 49)
-MAX_REFERRALS = admin_cfg.get("max_referrals", 3)
-
 PACKAGES = {
     "pkg_1": {"title": "1 звонок", "rub": 49, "badge": "Старт"},
     "pkg_5": {"title": "5 звонков", "rub": 149, "badge": "🔥 -40%"},
@@ -148,7 +192,6 @@ def get_user(uid, uname="Друг"):
     s_uid = str(uid).strip()
     if s_uid not in db:
         reg_date = datetime.now().strftime("%d.%m.%Y")
-        # 0 РУБЛЕЙ СТАРТОВЫЙ БАЛАНС
         db[s_uid] = {
             "name": uname,
             "balance_rub": 0,
@@ -178,7 +221,7 @@ def find_audio_file(filename):
     if os.path.exists(p2): return p2
     return None
 
-# ================= ШЛЮЗЫ ТЕЛЕФОНИИ С ОБХОДОМ СБОЕВ =================
+# ================= ШЛЮЗЫ ТЕЛЕФОНИИ =================
 def call_smsru_smart(phone):
     endpoints = [
         ("https://sms.ru/code/call", {"phone": phone, "api_id": SMSRU_API_KEY, "json": 1, "user_ip": "127.0.0.1"}),
@@ -267,7 +310,7 @@ def process_call_async(chat_id, phone, prank_key, p_title, wait_msg_id):
         chat_id, wait_msg_id, parse_mode="Markdown", reply_markup=kb_main_menu(chat_id)
     )
 
-# ================= ЮKASSA С БЛОКИРОВКОЙ НАКРУТОК =================
+# ================= ЮKASSA С АНТИФРОДОМ =================
 def create_yookassa_payment(amount_rub, user_id, package_name):
     url = "https://api.yookassa.ru/v3/payments"
     shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
@@ -299,9 +342,6 @@ def create_yookassa_payment(amount_rub, user_id, package_name):
         return False, str(e), None
 
 def check_yookassa_payment_safe(payment_id):
-    """
-    Проверяет платёж и блокирует накрутки через тест!
-    """
     url = f"https://api.yookassa.ru/v3/payments/{payment_id}"
     shop_id = admin_cfg.get("shop_id", YOOKASSA_SHOP_ID)
     secret_key = admin_cfg.get("secret_key", YOOKASSA_SECRET_KEY)
@@ -312,7 +352,6 @@ def check_yookassa_payment_safe(payment_id):
         paid = res.get("paid", False)
         is_test = res.get("test", False)
         
-        # ЕСЛИ ЭТО ТЕСТОВЫЙ ПЛАТЁЖ — ЗАПРЕЩАЕМ НАЧИСЛЕНИЕ ДЕНЕГ!
         if is_test:
             return "test_blocked", False
             
@@ -377,7 +416,7 @@ def cmd_start(m):
     get_user(m.chat.id, m.from_user.first_name or "Друг")
     bot.send_message(m.chat.id, MAIN_TEXT_BANNER, parse_mode="Markdown", reply_markup=kb_main_menu(m.chat.id))
 
-# ---- КАТАЛОГ ----
+# ---- КАТАЛОГ С АУДИОФАЙЛАМИ ----
 @bot.callback_query_handler(func=lambda c: c.data == "catalog")
 def on_catalog(c):
     admin_mode = is_admin(c.message.chat.id)
@@ -418,7 +457,7 @@ def on_open_prank(c):
     
     safe_nav(c, desc_text, reply_markup=kb)
 
-# ---- ВЫЗОВ ЗВОНКА ----
+# ---- ЗВОНКИ ----
 @bot.callback_query_handler(func=lambda c: c.data.startswith("setup_call_"))
 def on_setup_call(c):
     u = get_user(c.message.chat.id)
@@ -456,7 +495,35 @@ def step_phone_input(m):
     w = bot.send_message(chat_id, f"🚀 _Набираем номер +{phone}..._")
     threading.Thread(target=process_call_async, args=(chat_id, phone, prank_key, p["title"], w.message_id), daemon=True).start()
 
-# ---- ПАКЕТЫ И ОПЛАТА ----
+# ---- МАРШРУТИЗАЦИЯ ----
+@bot.callback_query_handler(func=lambda c: c.data == "nav_routing")
+def cb_routing(c):
+    u = get_user(c.message.chat.id)
+    cur = u.get("routing_mode", "auto")
+    text = (
+        "⚙️ **Настройки Маршрутизации Вызовов**\n\n"
+        f"1. ⚡ **Умный Авто-выбор** {'✅ [ВКЛЮЧЕНО]' if cur == 'auto' else ''}\n"
+        "   _Авто-переключение между шлюзами при любых сбоях операторов._\n\n"
+        f"2. 🇷🇺 **Только Zvonok (+7 РФ)** {'✅ [ВКЛЮЧЕНО]' if cur == 'zvonok' else ''}\n\n"
+        f"3. 🌍 **Только SMS.RU (+374 / Весь Мир)** {'✅ [ВКЛЮЧЕНО]' if cur == 'smsru' else ''}"
+    )
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton(f"{'👉 ' if cur=='auto' else ''}⚡ Умный Авто-выбор", callback_data="set_route_auto"))
+    kb.row(types.InlineKeyboardButton(f"{'👉 ' if cur=='zvonok' else ''}🇷🇺 Только Zvonok (+7)", callback_data="set_route_zvonok"))
+    kb.row(types.InlineKeyboardButton(f"{'👉 ' if cur=='smsru' else ''}🌍 Только SMS.RU (+374/Мир)", callback_data="set_route_smsru"))
+    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+    safe_nav(c, text, reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("set_route_"))
+def on_set_route(c):
+    mode = c.data.replace("set_route_", "")
+    u = get_user(c.message.chat.id)
+    u["routing_mode"] = mode
+    save_json(DB_FILE, db)
+    bot.answer_callback_query(c.id, "✅ Маршрут переключен!")
+    cb_routing(c)
+
+# ---- ОПЛАТА ----
 @bot.callback_query_handler(func=lambda c: c.data == "packages_menu")
 def cb_packages(c):
     text = (
@@ -506,14 +573,12 @@ def on_check_yk_pay(c):
     
     bot.answer_callback_query(c.id, "⏳ Проверяем реальную оплату...")
     
-    # Защита от повторного использования
     if payment_id in processed_payments:
         safe_nav(c, "⚠️ Этот платёж уже был начислен ранее!", reply_markup=kb_main_menu(uid))
         return
 
     status, paid = check_yookassa_payment_safe(payment_id)
     
-    # ЕСЛИ БОТ ОБНАРУЖИЛ ТЕСТОВЫЙ ПЛАТЁЖ БЕЗ СПИСАНИЯ ДЕНЕГ
     if status == "test_blocked":
         kb = types.InlineKeyboardMarkup()
         kb.row(types.InlineKeyboardButton("💳 Оплатить реально", callback_data="packages_menu"))
@@ -526,7 +591,6 @@ def on_check_yk_pay(c):
         ), reply_markup=kb)
         return
 
-    # ТОЛЬКО ЕСЛИ НАСТОЯЩИЙ ПЛАТЁЖ ПОДТВЕРЖДЁН
     if paid or status == "succeeded":
         processed_payments.append(payment_id)
         save_json(PROCESSED_PAYMENTS_FILE, processed_payments)
@@ -655,13 +719,14 @@ def show_admin_panel(chat_id, c=None):
         "👑 **Панель Администратора Пранк-Бота**\n\n"
         f"👤 Ваш ID: `{chat_id}` (Гл. Администратор)\n"
         f"💳 ЮKassa ShopID: `{shop_id}`\n"
-        f"🛡️ Защита от накрутки тестом: **АКТИВНА ✅**\n"
+        f"🛡️ Антифрод: **АКТИВЕН (Тест заблокирован)**\n"
         f"👥 Пользователей: **{len(db)}**\n"
         f"📞 Звонков совершено: **{total_calls}**\n"
-        f"💰 Баланс пользователей: **{total_rub} ₽**\n"
+        f"💰 Честный баланс пользователей: **{total_rub} ₽**\n"
         f"🏷️ Цена звонка: **{CALL_PRICE_RUB} ₽**"
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(types.InlineKeyboardButton("🧹 Очистить накрученные балансы", callback_data="adm_clean_fake"))
     kb.row(types.InlineKeyboardButton("🧪 Проверить статус шлюзов", callback_data="adm_check_services"))
     kb.row(types.InlineKeyboardButton("💳 Изменить баланс юзера", callback_data="adm_add_balance"))
     kb.row(types.InlineKeyboardButton("📢 Рассылка всем", callback_data="adm_broadcast"))
@@ -669,6 +734,24 @@ def show_admin_panel(chat_id, c=None):
     
     if c: safe_nav(c, text, reply_markup=kb)
     else: bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data == "adm_clean_fake")
+def on_adm_clean_fake(c):
+    if not is_admin(c.message.chat.id): return
+    bot.answer_callback_query(c.id, "⏳ Проверяем базу...")
+    cleaned_users, total_stripped = clean_fake_balances()
+    
+    if total_stripped > 0:
+        report = f"🧹 **Очистка накруток завершена!**\n\nСписано фейковых средств: **-{total_stripped} ₽**\n\n"
+        report += "\n".join(cleaned_users[:10])
+        if len(cleaned_users) > 10:
+            report += f"\n_...и ещё {len(cleaned_users)-10} пользователей_"
+    else:
+        report = "✅ **База чиста!** Все балансы пользователей строго соответствуют честным промокодам и бонусам."
+        
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_panel_open"))
+    safe_nav(c, report, reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data == "adm_check_services")
 def on_check_services(c):
@@ -701,7 +784,7 @@ def on_check_services(c):
         "🧪 **Статус сервисов телефонии:**\n\n"
         f"1. 🇷🇺 **Zvonok (+7 РФ):** {z_status}\n"
         f"2. 🌍 **SMS.RU (+374 Армения / Мир):** {s_status}\n"
-        f"3. 🛡️ **Антифрод ЮKassa:** Тестовые накрутки заблокированы"
+        f"3. 🛡️ **Антифрод ЮKassa:** Защита от накрутки активна"
     )
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_panel_open"))
@@ -723,7 +806,7 @@ def step_adm_uid_bal(m):
     user_data[m.chat.id] = {"target_uid": uid_text}
     user_state[m.chat.id] = "adm_waiting_amount_balance"
     u = get_user(uid_text)
-    bot.reply_to(m, f"Юзер найден (Текущий баланс: **{u.get('balance_rub', 0)} ₽**).\nСколько рублей начислить (или `-245` чтобы обнулить накрутку):")
+    bot.reply_to(m, f"Юзер найден (Текущий баланс: **{u.get('balance_rub', 0)} ₽**).\nСколько рублей начислить (или отрицательное число для списания):")
 
 @bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_amount_balance")
 def step_adm_amount_bal(m):
@@ -766,10 +849,9 @@ def step_adm_broadcast(m):
     bot.reply_to(m, f"✅ Рассылка доставлена: {sent} пользователям.")
     show_admin_panel(m.chat.id)
 
-print("\n>>> ПРАНК-БОТ GENCALLS (АНТИФРОД АКТИВЕН: ТЕСТОВЫЕ НАКРУТКИ ЗАБЛОКИРОВАНЫ) <<<")
+print("\n>>> ПРАНК-БОТ GENCALLS (АВТО-ОЧИСТКА НАКРУТОК + ЮKASSA АНТИФРОД) ЗАПУЩЕН! <<<")
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception:
         time.sleep(2)
-        
