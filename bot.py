@@ -1,4 +1,4 @@
-import os, json, telebot, requests, time, threading, logging
+import os, json, telebot, requests, time, threading, logging, uuid
 from datetime import datetime
 from telebot import types
 import urllib3
@@ -45,14 +45,18 @@ admin_cfg = load_json(CONFIG_FILE, {
     "call_price": 49,
     "max_referrals": 3,
     "admin_id": PRIMARY_ADMIN_ID,
-    "yk_wallet": "410011894523612",  # ВАШ КОШЕЛЕК ЮКАССА / ЮMONEY
-    "yk_recipient": "Каро Т.",
+    "crystal_auth_login": "dhdhe1728jd",
+    "crystal_secret": "c5fdf612bfd5e816a1a7447d2b942a3b03e36c04",
+    "crystal_salt": "a7e84e5da09dff11eb7be2ac0c6b83647a28efc1",
     "channel_url": "https://t.me/gencalls_channel",
     "zvonok_key": "d0808ab7450fca32147a9285018fe7a5",
     "campaign_id": "1783540036",
     "smsru_key": "92D687B8-1A07-CEB6-85CD-E0B1442FF4BF",
     "support": "tadevosankaro12"
 })
+admin_cfg["crystal_auth_login"] = "dhdhe1728jd"
+admin_cfg["crystal_secret"] = "c5fdf612bfd5e816a1a7447d2b942a3b03e36c04"
+admin_cfg["crystal_salt"] = "a7e84e5da09dff11eb7be2ac0c6b83647a28efc1"
 save_json(CONFIG_FILE, admin_cfg)
 
 db = load_json(DB_FILE, {})
@@ -132,7 +136,7 @@ def get_audio_for_player(key):
             return local_p, "file"
     return ensure_fallback_audio(key, fn), "file"
 
-# ================= ТЕЛЕФОНИЯ =================
+# ================= ШЛЮЗЫ ТЕЛЕФОНИИ =================
 def call_zvonok_campaign(phone):
     url = "https://zvonok.com/manager/cabapi_external/api/v1/phones/call/"
     params = {
@@ -250,16 +254,18 @@ def kb_main_menu(uid):
         types.InlineKeyboardButton("💳 Пополнить баланс", callback_data="packages_menu")
     )
     kb.row(
-        types.InlineKeyboardButton("🛟 Поддержка", callback_data="nav_help"),
-        types.InlineKeyboardButton("🎟️ Промокод", callback_data="enter_promo")
+        types.InlineKeyboardButton("📜 Правила и Оферта", callback_data="nav_rules"),
+        types.InlineKeyboardButton("🛟 Поддержка", callback_data="nav_help")
     )
     kb.row(
-        types.InlineKeyboardButton("📢 Telegram-канал", url=admin_cfg.get("channel_url", "https://t.me/gencalls_channel")),
+        types.InlineKeyboardButton("🎟️ Промокод", callback_data="enter_promo"),
         types.InlineKeyboardButton("🛡️ Анти-Пранк", callback_data="anti_prank")
+    )
+    kb.row(
+        types.InlineKeyboardButton("📢 Telegram-канал", url=admin_cfg.get("channel_url", "https://t.me/gencalls_channel"))
     )
     return kb
 
-# БЕЗОПАСНАЯ НАВИГАЦИЯ — КНОПКИ НИКОГДА НЕ ЗАВИСАЮТ!
 def safe_nav(c, text, reply_markup=None):
     try: bot.answer_callback_query(c.id)
     except Exception: pass
@@ -276,8 +282,8 @@ MAIN_TEXT_BANNER = (
     "🕵️‍♂️ Анонимность 100% — ваш номер скрыт.\n"
     "🎵 MP3-Плеер — слушайте пранки перед звонком!\n"
     "🎙️ Запись реакции — запись разговора прямо в этот чат!\n"
-    "⚡ Оплата SberPay / ЮKassa по чеку (без комиссии).\n\n"
-    "👇 Выберите действие в меню ниже:"
+    "⚡ Оплата онлайн через CrystalPAY (Карты РФ, SberPay, ЮMoney).\n\n"
+    "👇 Выберите действие в меню:"
 )
 
 @bot.message_handler(commands=["start", "menu"])
@@ -289,7 +295,7 @@ def cmd_start(m):
         welcome = f"🎉 Добро пожаловать в GenCalls!\n\n🎁 Мы подарили вам 2 БЕСПЛАТНЫХ ЗВОНКА!\n\n" + MAIN_TEXT_BANNER
     bot.send_message(m.chat.id, welcome, reply_markup=kb_main_menu(m.chat.id))
 
-# ================= КАТАЛОГ РОЗЫГРЫШЕЙ =================
+# ================= КАТАЛОГ =================
 @bot.callback_query_handler(func=lambda c: c.data == "catalog")
 def on_catalog_cb(c):
     kb = types.InlineKeyboardMarkup()
@@ -354,103 +360,118 @@ def step_phone_input(m):
     w = bot.send_message(chat_id, f"🚀 Набираем +{phone}...")
     threading.Thread(target=process_call_async, args=(chat_id, phone, prank_key, p["title"], w.message_id), daemon=True).start()
 
-# ================= ПОПОЛНЕНИЕ SBERPAY / ЮКАССА ПО ЧЕКУ =================
+# ================= КАССА CRYSTALPAY =================
+def create_crystal_invoice(amount, desc):
+    auth_login = admin_cfg.get("crystal_auth_login", "dhdhe1728jd").strip()
+    secret = admin_cfg.get("crystal_secret", "").strip()
+    
+    url = "https://api.crystalpay.io/v2/invoice/create/"
+    payload = {
+        "auth_login": auth_login,
+        "auth_secret": secret,
+        "amount": amount,
+        "type": "purchase",
+        "lifetime": 60,
+        "description": desc,
+        "redirect_url": admin_cfg.get("channel_url", "https://t.me/gencalls_channel")
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        res = r.json()
+        if not res.get("error"):
+            return True, res.get("url"), res.get("id")
+        return False, res.get("errors", [str(res)])[0], None
+    except Exception as e:
+        return False, str(e), None
+
+def check_crystal_invoice(invoice_id):
+    auth_login = admin_cfg.get("crystal_auth_login", "dhdhe1728jd").strip()
+    secret = admin_cfg.get("crystal_secret", "").strip()
+    url = "https://api.crystalpay.io/v2/invoice/info/"
+    payload = {
+        "auth_login": auth_login,
+        "auth_secret": secret,
+        "id": invoice_id
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=8)
+        res = r.json()
+        if not res.get("error") and res.get("state") == "payed":
+            return True
+    except Exception: pass
+    return False
+
 @bot.callback_query_handler(func=lambda c: c.data == "packages_menu")
 def cb_packages(c):
     kb = types.InlineKeyboardMarkup(row_width=1)
     for pid, p in PACKAGES.items():
-        kb.row(types.InlineKeyboardButton(f"{p['title']} — {p['rub']} ₽ ({p['badge']})", callback_data=f"buy_pkg_{pid}"))
+        kb.row(types.InlineKeyboardButton(f"{p['title']} — {p['rub']} ₽ ({p['badge']})", callback_data=f"buy_cryst_{pid}"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
-    safe_nav(c, "💳 Пополнение баланса:\n\nВыберите нужный пакет звонков:", reply_markup=kb)
+    safe_nav(c, "💳 Пополнение баланса:\nВыберите пакет:", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("buy_pkg_"))
-def on_buy_package(c):
-    pid = c.data.replace("buy_pkg_", "")
+@bot.callback_query_handler(func=lambda c: c.data.startswith("buy_cryst_"))
+def on_buy_crystal(c):
+    pid = c.data.replace("buy_cryst_", "")
     pkg = PACKAGES.get(pid)
     if not pkg: return
     
-    uid = c.message.chat.id
-    wallet = admin_cfg.get("yk_wallet", "410011894523612")
-    recipient = admin_cfg.get("yk_recipient", "Каро Т.")
     amount = pkg["rub"]
+    ok, pay_url, inv_id = create_crystal_invoice(amount, f"GenCalls {pkg['title']}")
     
-    # Прямая ссылка на перевод в ЮMoney (работает со Сбером и картами)
-    yoomoney_link = f"https://yoomoney.ru/to/{wallet}/{amount}"
-    
-    text = (
-        f"🟢 Оплата через SberPay / ЮKassa / Карту\n\n"
-        f"📦 Пакет: {pkg['title']}\n"
-        f"💰 К оплате: {amount} ₽\n\n"
-        f"📌 РЕКВИЗИТЫ КОШЕЛЬКА:\n"
-        f"• Номер счёта: {wallet}\n"
-        f"• Получатель: {recipient}\n\n"
-        f"📱 КАК ОПЛАТИТЬ ЧЕРЕЗ СБЕРБАНК ОНЛАЙН:\n"
-        f"1. Откройте Сбербанк Онлайн.\n"
-        f"2. Поиск ➔ напишите ЮMoney (или ЮKassa).\n"
-        f"3. Номер счёта: {wallet}\n"
-        f"4. Сумма: {amount} руб.\n"
-        f"5. Сохраните чек и нажмите кнопку «📤 Отправить чек» ниже!"
-    )
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.row(types.InlineKeyboardButton("🟢 Открыть форму оплаты ЮKassa / SberPay", url=yoomoney_link))
-    kb.row(types.InlineKeyboardButton("📤 Я оплатил (Отправить чек)", callback_data=f"send_chk_{amount}"))
-    kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
+    if ok and pay_url:
+        kb.row(types.InlineKeyboardButton("🟢 Перейти к оплате (Карты / SberPay / ЮMoney)", url=pay_url))
+        kb.row(types.InlineKeyboardButton("🔄 Я оплатил (Проверить платёж)", callback_data=f"chk_cr_{inv_id}_{amount}"))
+        kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
+        text = (
+            f"⚡ Счёт на оплату готов!\n\n"
+            f"📦 Пакет: {pkg['title']}\n"
+            f"💰 Сумма: {amount} ₽\n\n"
+            f"1. Нажмите зелёную кнопку ниже.\n"
+            f"2. Оплатите счёт удобным способом.\n"
+            f"3. Нажмите «Я оплатил» — баланс зачислится мгновенно!"
+        )
+    else:
+        kb.row(types.InlineKeyboardButton("👨‍💻 Написать в поддержку", url=f"https://t.me/{admin_cfg.get('support')}"))
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data="packages_menu"))
+        text = f"⚠️ Ошибка кассы: {pay_url}\nОбратитесь к администратору: @{admin_cfg.get('support')}"
     safe_nav(c, text, reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("send_chk_"))
-def on_req_chk(c):
-    amount = c.data.replace("send_chk_", "")
-    user_state[c.message.chat.id] = "waiting_receipt_file"
-    user_data[c.message.chat.id] = {"amount": int(amount)}
-    kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="packages_menu"))
-    safe_nav(c, f"📸 Отправьте скриншот чека из банка на сумму {amount} ₽ сюда в чат:", reply_markup=kb)
-
-@bot.message_handler(content_types=["photo", "document"], func=lambda m: user_state.get(m.chat.id) == "waiting_receipt_file")
-def on_got_receipt(m):
-    chat_id = m.chat.id
-    user_state[chat_id] = None
-    amount = user_data.get(chat_id, {}).get("amount", 49)
-    file_id = m.photo[-1].file_id if m.photo else m.document.file_id
-    admin_id = admin_cfg.get("admin_id", PRIMARY_ADMIN_ID)
-    
-    adm_kb = types.InlineKeyboardMarkup(row_width=2)
-    adm_kb.row(
-        types.InlineKeyboardButton(f"✅ Подтвердить (+{amount} ₽)", callback_data=f"adm_appr_{chat_id}_{amount}"),
-        types.InlineKeyboardButton("❌ Отклонить", callback_data=f"adm_decl_{chat_id}")
-    )
-    caption = f"🧾 НОВЫЙ ЧЕК SBERPAY / ЮKASSA!\n\n👤 От: {m.from_user.first_name} (ID: {chat_id})\n💰 Сумма: {amount} ₽"
-    try:
-        bot.send_photo(int(admin_id), file_id, caption=caption, reply_markup=adm_kb)
-        bot.reply_to(m, "✅ Чек отправлен на проверку! Баланс пополнится в течение 1–2 минут.", reply_markup=kb_main_menu(chat_id))
-    except Exception:
-        bot.reply_to(m, "✅ Чек принят.")
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("adm_appr_"))
-def on_admin_approve(c):
-    if not is_admin(c.message.chat.id): return
+@bot.callback_query_handler(func=lambda c: c.data.startswith("chk_cr_"))
+def on_chk_crystal(c):
     parts = c.data.split("_")
-    uid, amount = parts[2], int(parts[3])
-    u, _ = get_user(uid)
-    u["balance_rub"] += amount
-    save_json(DB_FILE, db)
-    bot.answer_callback_query(c.id, "✅ Оплата подтверждена!", show_alert=True)
-    try: bot.edit_message_caption(f"{c.message.caption}\n\n🟢 ОПЛАЧЕНО (+{amount} ₽) ✅", c.message.chat.id, c.message.message_id)
-    except Exception: pass
-    try: bot.send_message(int(uid), f"🎉 Оплата подтверждена! Начислено: +{amount} ₽\nВаш баланс: {u['balance_rub']} ₽", reply_markup=kb_main_menu(uid))
-    except Exception: pass
+    inv_id, amount = parts[2], int(parts[3])
+    
+    if check_crystal_invoice(inv_id):
+        u, _ = get_user(c.message.chat.id)
+        u["balance_rub"] += amount
+        save_json(DB_FILE, db)
+        bot.answer_callback_query(c.id, "🎉 Оплата подтверждена!", show_alert=True)
+        safe_nav(c, f"🎉 УРА! Платёж на {amount} ₽ успешно зачислен!\nВаш баланс: {u['balance_rub']} ₽", reply_markup=kb_main_menu(c.message.chat.id))
+    else:
+        bot.answer_callback_query(c.id, "⏳ Оплата ещё не поступила. Завершите перевод и нажмите ещё раз через 10 секунд.", show_alert=True)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("adm_decl_"))
-def on_admin_decline(c):
-    if not is_admin(c.message.chat.id): return
-    uid = c.data.split("_")[2]
-    bot.answer_callback_query(c.id, "❌ Отклонено", show_alert=True)
-    try: bot.edit_message_caption(f"{c.message.caption}\n\n🔴 ОТКЛОНЕНО ❌", c.message.chat.id, c.message.message_id)
-    except Exception: pass
-    try: bot.send_message(int(uid), f"❌ Чек отклонён. Средства не поступили на счёт кошелька. Поддержка: @{admin_cfg.get('support')}")
-    except Exception: pass
+# ================= МЕНЮ И НАВИГАЦИЯ =================
+@bot.callback_query_handler(func=lambda c: c.data == "nav_rules")
+def cb_rules(c):
+    rules_text = (
+        "📜 ПОЛЬЗОВАТЕЛЬСКОЕ СОГЛАШЕНИЕ И ПРАВИЛА (ОФЕРТА)\n\n"
+        "1. ОБЩИЕ ПОЛОЖЕНИЯ:\n"
+        "Сервис «GenCalls» предоставляет услуги развлекательных голосовых поздравлений и розыгрышей через телефонию.\n\n"
+        "2. УСЛОВИЯ ОПЛАТЫ И ОКАЗАНИЯ УСЛУГ:\n"
+        "• Все цены на услуги являются фиксированными и отображаются в меню пополнения.\n"
+        "• После успешной оплаты баланс начисляется на аккаунт моментально.\n"
+        "• Списание средств происходит только в момент успешного дозвона.\n\n"
+        "3. ПРАВИЛА БЕЗОПАСНОСТИ И АНТИ-СПАМ:\n"
+        "• Запрещено использовать сервис для угроз, мошенничества или хулиганства.\n"
+        "• Каждый пользователь может внести свой номер в бесплатный список защиты «🛡️ Анти-Пранк».\n\n"
+        "4. КОНТАКТЫ И ПОДДЕРЖКА:\n"
+        f"По всем вопросам и возвратам: @{admin_cfg.get('support')}"
+    )
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+    safe_nav(c, rules_text, reply_markup=kb)
 
-# ================= МЕНЮ =================
 @bot.callback_query_handler(func=lambda c: c.data == "nav_account")
 def cb_account(c):
     u, _ = get_user(c.message.chat.id)
@@ -463,16 +484,16 @@ def cb_account(c):
 @bot.callback_query_handler(func=lambda c: c.data == "nav_help")
 def cb_help(c):
     kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton("👨‍💻 Написать в поддержку", url=f"https://t.me/{admin_cfg.get('support')}"))
+    kb.row(types.InlineKeyboardButton("👨‍💻 Написать администратору", url=f"https://t.me/{admin_cfg.get('support')}"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
-    safe_nav(c, "🛟 Поддержка: Нажмите кнопку ниже для связи с создателем:", reply_markup=kb)
+    safe_nav(c, f"🛟 Служба заботы и поддержки:\n\nПо любым вопросам пишите: @{admin_cfg.get('support')}", reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data == "enter_promo")
 def on_enter_promo(c):
     user_state[c.message.chat.id] = "waiting_promo"
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="back_main"))
-    safe_nav(c, "🎟️ Введите промокод сообщением в чат:", reply_markup=kb)
+    safe_nav(c, "🎟️ Введите промокод в чат:", reply_markup=kb)
 
 @bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_promo")
 def step_promo(m):
@@ -494,7 +515,7 @@ def on_anti_prank(c):
     user_state[c.message.chat.id] = "waiting_bl"
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="back_main"))
-    safe_nav(c, "🛡️ Введите номер телефона для защиты от розыгрышей:", reply_markup=kb)
+    safe_nav(c, "🛡️ Введите номер для защиты от розыгрышей:", reply_markup=kb)
 
 @bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_bl")
 def step_bl(m):
@@ -510,7 +531,7 @@ def on_back(c):
     user_state[c.message.chat.id] = None
     safe_nav(c, MAIN_TEXT_BANNER, reply_markup=kb_main_menu(c.message.chat.id))
 
-# ================= АДМИН-ПАНЕЛЬ (/admin) =================
+# ================= АДМИНКА (/admin) =================
 @bot.message_handler(commands=["admin"])
 def cmd_admin(m):
     if not is_admin(m.chat.id): return
@@ -526,20 +547,18 @@ def show_admin_panel(chat_id, c=None):
     active_audios = len(audio_vault)
     text = (
         "👑 Панель Управления GenCalls\n\n"
+        f"💎 Касса CrystalPAY: ✅ Подключена (dhdhe1728jd)\n"
         f"🎭 Розыгрышей: {len(pranks_db)} шт.\n"
-        f"🎵 Привязано аудио: {active_audios} шт.\n"
-        f"🟢 Кошелёк ЮKassa: {admin_cfg.get('yk_wallet')}\n"
-        f"👤 Получатель: {admin_cfg.get('yk_recipient')}\n"
+        f"🎵 Аудио в базе: {active_audios} шт.\n"
         f"🏷️ Цена звонка: {admin_cfg.get('call_price')} ₽\n"
-        f"👥 Пользователей в базе: {len(db)}"
+        f"👥 Пользователей: {len(db)}"
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("🎭 РЕДАКТОР РОЗЫГРЫШЕЙ", callback_data="adm_pranks_manager"))
+    kb.row(types.InlineKeyboardButton("🎭 Редактор розыгрышей", callback_data="adm_pranks_manager"))
     kb.row(types.InlineKeyboardButton("🎵 Загрузить аудио к пранку", callback_data="adm_upload_audio_menu"))
-    kb.row(types.InlineKeyboardButton("🟢 Изменить кошелёк ЮKassa", callback_data="adm_change_yk_wallet"))
     kb.row(types.InlineKeyboardButton("🏷️ Изменить цену звонка", callback_data="adm_change_price"))
     kb.row(types.InlineKeyboardButton("💳 Выдать баланс юзеру", callback_data="adm_add_balance"))
-    kb.row(types.InlineKeyboardButton("📢 Рассылка сообщений", callback_data="adm_broadcast"))
+    kb.row(types.InlineKeyboardButton("📢 Рассылка", callback_data="adm_broadcast"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
     if c: safe_nav(c, text, reply_markup=kb)
     else: bot.send_message(chat_id, text, reply_markup=kb)
@@ -649,26 +668,6 @@ def step_adm_audio(m):
         bot.reply_to(m, f"🎉 УСПЕХ! Аудио привязано к {pranks_db.get(k, {}).get('title', k)}!")
     show_admin_panel(m.chat.id)
 
-# ---- СМЕНА КОШЕЛЬКА ЮКАССА В АДМИНКЕ ----
-@bot.callback_query_handler(func=lambda c: c.data == "adm_change_yk_wallet")
-def on_adm_yk_wallet(c):
-    if not is_admin(c.message.chat.id): return
-    user_state[c.message.chat.id] = "adm_yk_wallet"
-    kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
-    safe_nav(c, "🟢 Введите номер кошелька ЮKassa и имя получателя через запятую:\n\nПример: 410011894523612, Каро Т.", reply_markup=kb)
-
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_yk_wallet")
-def step_adm_yk_wallet(m):
-    if not is_admin(m.chat.id): return
-    user_state[m.chat.id] = None
-    parts = [p.strip() for p in m.text.split(",")]
-    if len(parts) >= 1: admin_cfg["yk_wallet"] = parts[0]
-    if len(parts) >= 2: admin_cfg["yk_recipient"] = parts[1]
-    save_json(CONFIG_FILE, admin_cfg)
-    bot.reply_to(m, "✅ Кошелёк ЮKassa успешно обновлён!")
-    show_admin_panel(m.chat.id)
-
 @bot.callback_query_handler(func=lambda c: c.data == "adm_change_price")
 def on_adm_price(c):
     if not is_admin(c.message.chat.id): return
@@ -742,7 +741,7 @@ def step_adm_bc(m):
     bot.reply_to(m, f"✅ Доставлено {cnt} пользователям.")
     show_admin_panel(m.chat.id)
 
-print("\n>>> GENCALLS: ВСЕ КНОПКИ И ОПЛАТА ИСПРАВЛЕНЫ! <<<")
+print("\n>>> GENCALLS: ПОЛНОЕ СООТВЕТСТВИЕ СТАНДАРТАМ CRYSTALPAY АКТИВИРОВАНО! <<<")
 while True:
     try: bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception: time.sleep(2)
