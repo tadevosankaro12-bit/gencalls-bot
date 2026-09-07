@@ -45,8 +45,8 @@ admin_cfg = load_json(CONFIG_FILE, {
     "call_price": 49,
     "max_referrals": 3,
     "admin_id": PRIMARY_ADMIN_ID,
-    "yookassa_requisites": "410011234567890 (ЮKassa / ЮMoney / SberPay)",
-    "yookassa_recipient": "Каро Т. (ЮKassa)",
+    "yookassa_shop_id": "YOUR_SHOP_ID",
+    "yookassa_secret_key": "live_YOUR_SECRET_KEY",
     "channel_url": "https://t.me/gencalls_channel",
     "zvonok_key": "d0808ab7450fca32147a9285018fe7a5",
     "campaign_id": "1783540036",
@@ -282,7 +282,7 @@ MAIN_TEXT_BANNER = (
     "🕵️‍♂️ **Анонимность 100%** — ваш номер скрыт.\n"
     "🎵 **MP3-Плеер** — слушайте пранки перед звонком!\n"
     "🎙️ **Запись реакции** — запись разговора прямо в этот чат!\n"
-    "💳 **Оплата ЮKassa / SberPay** (0% комиссии по чеку).\n\n"
+    "⚡ **Оплата онлайн:** SberPay и банковские карты с авто-зачислением!\n\n"
     "👇 _Выберите пранк и разыграйте друга:_"
 )
 
@@ -371,92 +371,142 @@ def step_phone_input(m):
     w = bot.send_message(chat_id, f"🚀 _Набираем +{phone}..._")
     threading.Thread(target=process_call_async, args=(chat_id, phone, prank_key, p["title"], w.message_id), daemon=True).start()
 
-# ================= ПОПОЛНЕНИЕ ЮКАССА ПО ЧЕКУ =================
+# ================= АВТО-ОПЛАТА ЮКАССА: SBERPAY И БАНКОВСКИЕ КАРТЫ =================
 @bot.callback_query_handler(func=lambda c: c.data == "packages_menu")
 def cb_packages(c):
     kb = types.InlineKeyboardMarkup(row_width=1)
     for pid, p in PACKAGES.items():
-        kb.row(types.InlineKeyboardButton(f"{p['title']} — {p['rub']} ₽ ({p['badge']})", callback_data=f"pay_yk_{pid}"))
+        kb.row(types.InlineKeyboardButton(f"{p['title']} — {p['rub']} ₽ ({p['badge']})", callback_data=f"choose_pay_{pid}"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
-    safe_nav(c, "💳 **Пополнение баланса (ЮKassa / SberPay):**\n\nВыберите пакет:", reply_markup=kb)
+    safe_nav(c, "💳 **Пополнение баланса:**\n\nВыберите пакет звонков:", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("pay_yk_"))
-def on_pay_yk(c):
-    pid = c.data.replace("pay_yk_", "")
+@bot.callback_query_handler(func=lambda c: c.data.startswith("choose_pay_"))
+def on_choose_pay(c):
+    pid = c.data.replace("choose_pay_", "")
     pkg = PACKAGES.get(pid)
     if not pkg: return
-    uid = c.message.chat.id
-    user_data[uid] = {"pending_amount": pkg["rub"]}
+    
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.row(types.InlineKeyboardButton("🟢 Оплатить через SberPay (Сбербанк Онлайн)", callback_data=f"pay_yk_sber_{pid}"))
+    kb.row(types.InlineKeyboardButton("💳 Банковская карта (МИР, Visa, Mastercard, Т-Банк)", callback_data=f"pay_yk_card_{pid}"))
+    kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
     
     text = (
-        f"💳 **Оплата через ЮKassa / SberPay (по чеку)**\n\n"
-        f"📦 Пакет: **{pkg['title']}**\n"
-        f"💰 К оплате: **{pkg['rub']} ₽**\n\n"
-        f"📌 **Реквизиты для оплаты ЮKassa:**\n"
-        f"• Номер кошелька / счёта: `{admin_cfg.get('yookassa_requisites')}`\n"
-        f"• Получатель: **{admin_cfg.get('yookassa_recipient')}**\n\n"
-        f"📝 **Инструкция:**\n"
-        f"1. Переведите ровно **{pkg['rub']} ₽** по реквизитам выше.\n"
-        f"2. Сохраните чек или сделайте скриншот.\n"
-        f"3. Нажмите кнопку **«📤 Отправить чек»** и прикрепите фото чека сюда в чат!"
+        f"📦 Выбран пакет: **{pkg['title']}**\n"
+        f"💰 Сумма: **{pkg['rub']} ₽**\n\n"
+        f"Выберите способ оплаты через официальную ЮKassa:"
     )
-    kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton("📤 Отправить чек об оплате", callback_data=f"send_receipt_{pkg['rub']}"))
-    kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
     safe_nav(c, text, reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("send_receipt_"))
-def on_req_receipt(c):
-    amount = c.data.replace("send_receipt_", "")
-    user_state[c.message.chat.id] = "waiting_receipt_photo"
-    user_data[c.message.chat.id] = {"amount": int(amount)}
-    kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="packages_menu"))
-    safe_nav(c, f"📸 **Отправьте скриншот чека ЮKassa на {amount} ₽ в чат:**", reply_markup=kb)
-
-@bot.message_handler(content_types=["photo", "document"], func=lambda m: user_state.get(m.chat.id) == "waiting_receipt_photo")
-def on_receive_receipt(m):
-    chat_id = m.chat.id
-    user_state[chat_id] = None
-    amount = user_data.get(chat_id, {}).get("amount", 49)
-    file_id = m.photo[-1].file_id if m.photo else m.document.file_id
-    admin_id = admin_cfg.get("admin_id", PRIMARY_ADMIN_ID)
+# ---- СОЗДАНИЕ ПЛАТЕЖА SBERPAY ИЛИ БАНКОВСКОЙ КАРТЫ ----
+def create_yookassa_payment(amount_rub, description, pay_type="sberbank"):
+    shop_id = admin_cfg.get("yookassa_shop_id", "")
+    secret_key = admin_cfg.get("yookassa_secret_key", "")
     
-    adm_kb = types.InlineKeyboardMarkup(row_width=2)
-    adm_kb.row(
-        types.InlineKeyboardButton(f"✅ Подтвердить (+{amount} ₽)", callback_data=f"adm_appr_{chat_id}_{amount}"),
-        types.InlineKeyboardButton("❌ Отклонить", callback_data=f"adm_decl_{chat_id}")
-    )
-    caption = f"🧾 **НОВЫЙ ЧЕК ЮKASSA!**\n\n👤 От: {m.from_user.first_name} (`{chat_id}`)\n💰 Сумма: **{amount} ₽**"
+    if not shop_id or "YOUR_" in shop_id:
+        return False, "Shop_ID не настроен", None
+        
+    url = "https://api.yookassa.ru/v3/payments"
+    order_id = str(uuid.uuid4())
+    headers = {"Idempotence-Key": order_id, "Content-Type": "application/json"}
+    
+    payload = {
+        "amount": {"value": f"{amount_rub}.00", "currency": "RUB"},
+        "capture": True,
+        "confirmation": {
+            "type": "redirect",
+            "return_url": admin_cfg.get("channel_url", "https://t.me/gencalls_channel")
+        },
+        "description": description
+    }
+    
+    # Для SberPay указываем конкретный платёжный метод, чтобы сразу перекидывало в Сбербанк!
+    if pay_type == "sberbank":
+        payload["payment_method_data"] = {"type": "sberbank"}
+    elif pay_type == "bank_card":
+        payload["payment_method_data"] = {"type": "bank_card"}
+
     try:
-        bot.send_photo(int(admin_id), file_id, caption=caption, parse_mode="Markdown", reply_markup=adm_kb)
-        bot.reply_to(m, "✅ **Чек отправлен! Баланс пополнится сразу после проверки администратором.**", reply_markup=kb_main_menu(chat_id))
-    except Exception:
-        bot.reply_to(m, "✅ Чек принят.")
+        r = requests.post(url, auth=(shop_id, secret_key), json=payload, headers=headers, timeout=12)
+        res = r.json()
+        pay_url = res.get("confirmation", {}).get("confirmation_url")
+        pay_id = res.get("id")
+        if pay_url and pay_id:
+            return True, pay_url, pay_id
+        return False, res.get("description", str(res)), None
+    except Exception as e:
+        return False, str(e), None
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("adm_appr_"))
-def on_admin_approve(c):
-    if not is_admin(c.message.chat.id): return
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pay_yk_sber_") or c.data.startswith("pay_yk_card_"))
+def on_exec_pay(c):
+    is_sber = c.data.startswith("pay_yk_sber_")
+    pid = c.data.replace("pay_yk_sber_", "").replace("pay_yk_card_", "")
+    pkg = PACKAGES.get(pid)
+    if not pkg: return
+    
+    pay_type = "sberbank" if is_sber else "bank_card"
+    method_name = "🟢 SberPay (Сбербанк Онлайн)" if is_sber else "💳 Банковская карта"
+    desc = f"Пополнение GenCalls {pkg['title']}"
+    
+    ok, pay_url, pay_id = create_yookassa_payment(pkg["rub"], desc, pay_type)
+    
+    if not ok:
+        kb = types.InlineKeyboardMarkup()
+        kb.row(types.InlineKeyboardButton("👨‍💻 Написать в поддержку", url=f"https://t.me/{admin_cfg.get('support')}"))
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data="packages_menu"))
+        safe_nav(c, f"⚠️ **Платёжная касса настраивается!**\n\nОшибка: `{pay_url}`\nАдминистратор может настроить ShopID и Secret_Key в меню `/admin`.", reply_markup=kb)
+        return
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    btn_text = "🟢 Оплатить в Сбербанк Онлайн" if is_sber else "💳 Перейти к оплате картой"
+    kb.row(types.InlineKeyboardButton(btn_text, url=pay_url))
+    kb.row(types.InlineKeyboardButton("🔄 Я оплатил (Проверить платёж)", callback_data=f"check_pay_{pay_id}_{pkg['rub']}"))
+    kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
+    
+    text = (
+        f"⚡ **Счёт на оплату успешно создан!**\n\n"
+        f"Способ: **{method_name}**\n"
+        f"Сумма: **{pkg['rub']} ₽** ({pkg['title']})\n\n"
+        f"1. Нажмите кнопку **«{btn_text}»** ниже.\n"
+        f"2. Подтвердите оплату в приложении.\n"
+        f"3. Вернитесь сюда и нажмите **«🔄 Я оплатил (Проверить платёж)»** — баланс зачислится мгновенно!"
+    )
+    safe_nav(c, text, reply_markup=kb)
+
+# ---- АВТО-ПРОВЕРКА СТАТУСА ПЛАТЕЖА ЮКАССА ----
+@bot.callback_query_handler(func=lambda c: c.data.startswith("check_pay_"))
+def on_check_payment_status(c):
     parts = c.data.split("_")
-    uid, amount = parts[2], int(parts[3])
-    u, _ = get_user(uid)
-    u["balance_rub"] += amount
-    save_json(DB_FILE, db)
-    bot.answer_callback_query(c.id, "✅ Оплата подтверждена!")
-    try: bot.edit_message_caption(f"{c.message.caption}\n\n🟢 **ОПЛАЧЕНО (+{amount} ₽) ✅**", c.message.chat.id, c.message.message_id)
+    pay_id, amount = parts[2], int(parts[3])
+    shop_id = admin_cfg.get("yookassa_shop_id", "")
+    secret_key = admin_cfg.get("yookassa_secret_key", "")
+    
+    try:
+        r = requests.get(f"https://api.yookassa.ru/v3/payments/{pay_id}", auth=(shop_id, secret_key), timeout=10)
+        res = r.json()
+        status = res.get("status")
+        
+        if status == "succeeded":
+            u, _ = get_user(c.message.chat.id)
+            u["balance_rub"] += amount
+            save_json(DB_FILE, db)
+            bot.answer_callback_query(c.id, "🎉 Оплата подтверждена!", show_alert=True)
+            safe_nav(c, (
+                f"🎉 **ОПЛАТА УСПЕШНО ЗАЧИСЛЕНА!**\n\n"
+                f"💰 Начислено: **+{amount} ₽**\n"
+                f"📞 Ваш баланс: **{u['balance_rub']} ₽** ({u['balance_rub'] // admin_cfg.get('call_price', 49)} звонков)\n\n"
+                f"Приятных розыгрышей! 🚀"
+            ), reply_markup=kb_main_menu(c.message.chat.id))
+            return
+        elif status == "pending" or status == "waiting_for_capture":
+            bot.answer_callback_query(c.id, "⏳ Оплата ещё обрабатывается банком. Завершите перевод и нажмите ещё раз через 10 секунд.", show_alert=True)
+            return
+        elif status == "canceled":
+            bot.answer_callback_query(c.id, "❌ Платёж был отменён в банке.", show_alert=True)
+            return
     except Exception: pass
-    try: bot.send_message(int(uid), f"🎉 **Оплата подтверждена! Начислено: +{amount} ₽**\nБаланс: **{u['balance_rub']} ₽**", reply_markup=kb_main_menu(uid))
-    except Exception: pass
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("adm_decl_"))
-def on_admin_decline(c):
-    if not is_admin(c.message.chat.id): return
-    uid = c.data.split("_")[2]
-    bot.answer_callback_query(c.id, "❌ Отклонено")
-    try: bot.edit_message_caption(f"{c.message.caption}\n\n🔴 **ОТКЛОНЕНО ❌**", c.message.chat.id, c.message.message_id)
-    except Exception: pass
-    try: bot.send_message(int(uid), f"❌ Чек отклонён. Средства не поступили на счёт ЮKassa. Поддержка: @{admin_cfg.get('support')}")
-    except Exception: pass
+    
+    bot.answer_callback_query(c.id, "⚠️ Платёж пока не поступил. Попробуйте через пару секунд.", show_alert=True)
 
 # ================= МЕНЮ И НАВИГАЦИЯ =================
 @bot.callback_query_handler(func=lambda c: c.data == "nav_account")
@@ -541,18 +591,20 @@ def cb_admin_panel(c):
 
 def show_admin_panel(chat_id, c=None):
     active_audios = len(audio_vault)
+    yk_status = "✅ Настроена" if (admin_cfg.get("yookassa_shop_id") and "YOUR_" not in admin_cfg.get("yookassa_shop_id")) else "⚠️ Требует настройки"
     text = (
         "👑 **Панель Управления GenCalls**\n\n"
         f"🎭 Розыгрышей в каталоге: **{len(pranks_db)} шт.**\n"
         f"🎵 Привязано MP3 в облаке: **{active_audios} шт.**\n"
-        f"💳 Реквизиты ЮKassa: `{admin_cfg.get('yookassa_requisites')}`\n"
+        f"💳 ЮKassa (SberPay / Карты): **{yk_status}**\n"
+        f"🆔 Shop_ID: `{admin_cfg.get('yookassa_shop_id')}`\n"
         f"🏷️ Цена звонка: **{admin_cfg.get('call_price')} ₽**\n"
         f"👥 Пользователей в базе: **{len(db)}**"
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("🎭 РЕДАКТОР РОЗЫГРЫШЕЙ (Добавить/Удалить)", callback_data="adm_pranks_manager"))
+    kb.row(types.InlineKeyboardButton("🎭 РЕДАКТОР РОЗЫГРЫШЕЙ", callback_data="adm_pranks_manager"))
     kb.row(types.InlineKeyboardButton("🎵 Загрузить аудио к пранку", callback_data="adm_upload_audio_menu"))
-    kb.row(types.InlineKeyboardButton("💳 Изменить реквизиты ЮKassa", callback_data="adm_change_yk_req"))
+    kb.row(types.InlineKeyboardButton("💳 Настроить ЮKassa (API-ключи)", callback_data="adm_change_yk_keys"))
     kb.row(types.InlineKeyboardButton("🏷️ Изменить цену звонка", callback_data="adm_change_price"))
     kb.row(types.InlineKeyboardButton("💳 Выдать баланс юзеру", callback_data="adm_add_balance"))
     kb.row(types.InlineKeyboardButton("📢 Рассылка сообщений", callback_data="adm_broadcast"))
@@ -560,7 +612,7 @@ def show_admin_panel(chat_id, c=None):
     if c: safe_nav(c, text, reply_markup=kb)
     else: bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
 
-# ---- РЕДАКТОР РОЗЫГРЫШЕЙ (ДОБАВИТЬ / УДАЛИТЬ) ----
+# ---- РЕДАКТОР РОЗЫГРЫШЕЙ ----
 @bot.callback_query_handler(func=lambda c: c.data == "adm_pranks_manager")
 def on_pranks_manager(c):
     if not is_admin(c.message.chat.id): return
@@ -572,9 +624,8 @@ def on_pranks_manager(c):
             types.InlineKeyboardButton("❌ Удалить", callback_data=f"adm_del_prank_{k}")
         )
     kb.row(types.InlineKeyboardButton("🔙 В админку", callback_data="admin_panel_open"))
-    safe_nav(c, "🎭 **Управление каталогом розыгрышей:**\n\nЗдесь вы можете добавить новый пранк или удалить ненужный:", reply_markup=kb)
+    safe_nav(c, "🎭 **Управление каталогом розыгрышей:**\n\nВы можете добавить новый пранк или удалить ненужный:", reply_markup=kb)
 
-# ---- СОЗДАНИЕ НОВОГО РОЗЫГРЫША ----
 @bot.callback_query_handler(func=lambda c: c.data == "adm_prank_create_new")
 def on_create_prank_start(c):
     if not is_admin(c.message.chat.id): return
@@ -620,7 +671,6 @@ def step_prank_new_audio(m):
         bot.reply_to(m, f"🎉 **Розыгрыш «{d.get('new_title')}» успешно создан и добавлен в каталог!**")
         show_admin_panel(m.chat.id)
 
-# ---- УДАЛЕНИЕ РОЗЫГРЫША ----
 @bot.callback_query_handler(func=lambda c: c.data.startswith("adm_del_prank_"))
 def on_del_prank(c):
     if not is_admin(c.message.chat.id): return
@@ -634,7 +684,6 @@ def on_del_prank(c):
         bot.answer_callback_query(c.id, "✅ Розыгрыш удален!")
     on_pranks_manager(c)
 
-# ---- ПРИВЯЗКА АУДИО К РОЗЫГРЫШАМ ----
 @bot.callback_query_handler(func=lambda c: c.data == "adm_upload_audio_menu")
 def on_upload_menu(c):
     if not is_admin(c.message.chat.id): return
@@ -668,24 +717,24 @@ def step_adm_audio(m):
         bot.reply_to(m, f"🎉 **УСПЕХ! Аудиофайл привязан к {pranks_db.get(k, {}).get('title', k)}!**")
     show_admin_panel(m.chat.id)
 
-# ---- РЕКВИЗИТЫ ЮКАССА ----
-@bot.callback_query_handler(func=lambda c: c.data == "adm_change_yk_req")
-def on_adm_yk_req(c):
+# ---- НАСТРОЙКА КЛЮЧЕЙ ЮКАССА ----
+@bot.callback_query_handler(func=lambda c: c.data == "adm_change_yk_keys")
+def on_adm_yk_keys(c):
     if not is_admin(c.message.chat.id): return
-    user_state[c.message.chat.id] = "adm_yk_req"
+    user_state[c.message.chat.id] = "adm_yk_keys"
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
-    safe_nav(c, "💳 **Введите реквизиты ЮKassa через запятую:**\n\n_Формат:_ `Номер_кошелька/счета, Получатель`\n_Пример:_ `410011234567890 (ЮKassa / SberPay), Каро Т.`", reply_markup=kb)
+    safe_nav(c, "💳 **Введите Shop_ID и Секретный ключ ЮKassa через запятую:**\n\n_Формат:_ `Shop_ID, live_Secret_Key`\n_Пример:_ `384729, live_hdb83b...`", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_yk_req")
-def step_adm_yk_req(m):
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_yk_keys")
+def step_adm_yk_keys(m):
     if not is_admin(m.chat.id): return
     user_state[m.chat.id] = None
     parts = [p.strip() for p in m.text.split(",")]
-    if len(parts) >= 1: admin_cfg["yookassa_requisites"] = parts[0]
-    if len(parts) >= 2: admin_cfg["yookassa_recipient"] = parts[1]
+    if len(parts) >= 1: admin_cfg["yookassa_shop_id"] = parts[0]
+    if len(parts) >= 2: admin_cfg["yookassa_secret_key"] = parts[1]
     save_json(CONFIG_FILE, admin_cfg)
-    bot.reply_to(m, "✅ Реквизиты ЮKassa успешно сохранены!")
+    bot.reply_to(m, "✅ Ключи ЮKassa успешно сохранены! Автоматический SberPay и приём карт активны!")
     show_admin_panel(m.chat.id)
 
 @bot.callback_query_handler(func=lambda c: c.data == "adm_change_price")
@@ -761,7 +810,8 @@ def step_adm_bc(m):
     bot.reply_to(m, f"✅ Доставлено {cnt} пользователям.")
     show_admin_panel(m.chat.id)
 
-print("\n>>> GENCALLS: ЮКАССА ПО ЧЕКАМ + ПОЛНОЦЕННЫЙ КОНСТРУКТОР РОЗЫГРЫШЕЙ ГОТОВЫ! <<<")
+print("\n>>> GENCALLS: АВТО-SBERPAY + БАНКОВСКИЕ КАРТЫ ЮКАССА ЗАПУЩЕНЫ! <<<")
 while True:
     try: bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception: time.sleep(2)
+        
