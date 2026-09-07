@@ -58,7 +58,24 @@ save_json(CONFIG_FILE, admin_cfg)
 db = load_json(DB_FILE, {})
 promocodes = load_json(PROMO_FILE, {"GEN2026": {"rub": 49, "uses": 100, "used_by": []}})
 blacklist = load_json(BLACKLIST_FILE, [])
+
+# ================= ВЕЧНОЕ ХРАНИЛИЩЕ АУДИО (НЕ СТИРАЕТСЯ С СЕРВЕРА!) =================
+# Сюда зашиваются file_id навсегда прямо в код!
+PERMANENT_AUDIO_VAULT = {
+    # Бот всегда сначала берёт аудио отсюда:
+    "babka": "",
+    "tulip": "",
+    "rkn": "",
+    "django": "",
+    "govnovoz": "",
+    "courier": ""
+}
+
+# Динамическая память + постоянная
 audio_vault = load_json(AUDIO_STORAGE_FILE, {})
+for k, v in PERMANENT_AUDIO_VAULT.items():
+    if v and (k not in audio_vault or not audio_vault[k]):
+        audio_vault[k] = v
 
 DEFAULT_PRANKS = {
     "babka": {"title": "👵 Бабка Лидия (Долг)", "tag": "ХИТ 🔥", "dur": 35, "desc": "Скандальная пенсионерка обвиняет в краже пенсии и требует вернуть долг с угрозами участковым.", "file": "babka.mp3", "public": True},
@@ -111,7 +128,6 @@ def parse_phone(text):
     elif len(digits) == 11 and digits.startswith("8"): return "7" + digits[1:]
     return digits
 
-# ================= АУДИОСИСТЕМА =================
 def ensure_fallback_audio(key, filename):
     path = os.path.join(AUDIO_DIR, filename)
     if not os.path.exists(path) or os.path.getsize(path) < 100:
@@ -123,8 +139,13 @@ def ensure_fallback_audio(key, filename):
     return path
 
 def get_audio_for_player(key):
+    # 1. Приоритет: вечный Telegram cloud file_id
     if key in audio_vault and audio_vault[key]:
         return audio_vault[key], "cloud"
+    if key in PERMANENT_AUDIO_VAULT and PERMANENT_AUDIO_VAULT[key]:
+        return PERMANENT_AUDIO_VAULT[key], "cloud"
+        
+    # 2. Локальный диск
     p = pranks_db.get(key, {})
     fn = p.get("file", f"{key}.mp3")
     for fld in [AUDIO_DIR, BASE_DIR]:
@@ -282,7 +303,7 @@ MAIN_TEXT_BANNER = (
     "🕵️‍♂️ **Анонимность 100%** — ваш номер скрыт.\n"
     "🎵 **MP3-Плеер** — слушайте пранки перед звонком!\n"
     "🎙️ **Запись реакции** — запись разговора прямо в этот чат!\n"
-    "⚡ **Оплата онлайн:** SberPay и банковские карты с авто-зачислением!\n\n"
+    "⚡ **Оплата онлайн:** SberPay и банковские карты через ЮKassa.\n\n"
     "👇 _Выберите пранк и разыграйте друга:_"
 )
 
@@ -388,7 +409,7 @@ def on_choose_pay(c):
     
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.row(types.InlineKeyboardButton("🟢 Оплатить через SberPay (Сбербанк Онлайн)", callback_data=f"pay_yk_sber_{pid}"))
-    kb.row(types.InlineKeyboardButton("💳 Банковская карта (МИР, Visa, Mastercard, Т-Банк)", callback_data=f"pay_yk_card_{pid}"))
+    kb.row(types.InlineKeyboardButton("💳 Банковская карта (МИР, Visa, Mastercard)", callback_data=f"pay_yk_card_{pid}"))
     kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
     
     text = (
@@ -398,7 +419,6 @@ def on_choose_pay(c):
     )
     safe_nav(c, text, reply_markup=kb)
 
-# ---- СОЗДАНИЕ ПЛАТЕЖА SBERPAY ИЛИ БАНКОВСКОЙ КАРТЫ ----
 def create_yookassa_payment(amount_rub, description, pay_type="sberbank"):
     shop_id = admin_cfg.get("yookassa_shop_id", "")
     secret_key = admin_cfg.get("yookassa_secret_key", "")
@@ -420,7 +440,6 @@ def create_yookassa_payment(amount_rub, description, pay_type="sberbank"):
         "description": description
     }
     
-    # Для SberPay указываем конкретный платёжный метод, чтобы сразу перекидывало в Сбербанк!
     if pay_type == "sberbank":
         payload["payment_method_data"] = {"type": "sberbank"}
     elif pay_type == "bank_card":
@@ -473,7 +492,6 @@ def on_exec_pay(c):
     )
     safe_nav(c, text, reply_markup=kb)
 
-# ---- АВТО-ПРОВЕРКА СТАТУСА ПЛАТЕЖА ЮКАССА ----
 @bot.callback_query_handler(func=lambda c: c.data.startswith("check_pay_"))
 def on_check_payment_status(c):
     parts = c.data.split("_")
@@ -593,7 +611,7 @@ def show_admin_panel(chat_id, c=None):
     active_audios = len(audio_vault)
     yk_status = "✅ Настроена" if (admin_cfg.get("yookassa_shop_id") and "YOUR_" not in admin_cfg.get("yookassa_shop_id")) else "⚠️ Требует настройки"
     text = (
-        "👑 **Панель Управления GenCalls**\n\n"
+        "👑 **Панель Управления GenCalls (Защита от сброса)**\n\n"
         f"🎭 Розыгрышей в каталоге: **{len(pranks_db)} шт.**\n"
         f"🎵 Привязано MP3 в облаке: **{active_audios} шт.**\n"
         f"💳 ЮKassa (SberPay / Карты): **{yk_status}**\n"
@@ -668,7 +686,7 @@ def step_prank_new_audio(m):
         save_json(CUSTOM_PRANKS_FILE, pranks_db)
         audio_vault[k] = fid
         save_json(AUDIO_STORAGE_FILE, audio_vault)
-        bot.reply_to(m, f"🎉 **Розыгрыш «{d.get('new_title')}» успешно создан и добавлен в каталог!**")
+        bot.reply_to(m, f"🎉 **Розыгрыш «{d.get('new_title')}» успешно создан!**\n\n📌 Вечный ID файла: `{fid}`")
         show_admin_panel(m.chat.id)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("adm_del_prank_"))
@@ -714,17 +732,20 @@ def step_adm_audio(m):
     if fid and k:
         audio_vault[k] = fid
         save_json(AUDIO_STORAGE_FILE, audio_vault)
-        bot.reply_to(m, f"🎉 **УСПЕХ! Аудиофайл привязан к {pranks_db.get(k, {}).get('title', k)}!**")
+        bot.reply_to(m, (
+            f"🎉 **УСПЕХ! Аудиофайл привязан к {pranks_db.get(k, {}).get('title', k)}!**\n\n"
+            f"📌 **Вечный ID в Telegram:**\n`{fid}`\n\n"
+            f"_Теперь этот трек сохранён в памяти бота навсегда!_"
+        ))
     show_admin_panel(m.chat.id)
 
-# ---- НАСТРОЙКА КЛЮЧЕЙ ЮКАССА ----
 @bot.callback_query_handler(func=lambda c: c.data == "adm_change_yk_keys")
 def on_adm_yk_keys(c):
     if not is_admin(c.message.chat.id): return
     user_state[c.message.chat.id] = "adm_yk_keys"
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
-    safe_nav(c, "💳 **Введите Shop_ID и Секретный ключ ЮKassa через запятую:**\n\n_Формат:_ `Shop_ID, live_Secret_Key`\n_Пример:_ `384729, live_hdb83b...`", reply_markup=kb)
+    safe_nav(c, "💳 **Введите Shop_ID и Секретный ключ ЮKassa через запятую:**\n\n_Формат:_ `Shop_ID, live_Secret_Key`", reply_markup=kb)
 
 @bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_yk_keys")
 def step_adm_yk_keys(m):
@@ -734,7 +755,7 @@ def step_adm_yk_keys(m):
     if len(parts) >= 1: admin_cfg["yookassa_shop_id"] = parts[0]
     if len(parts) >= 2: admin_cfg["yookassa_secret_key"] = parts[1]
     save_json(CONFIG_FILE, admin_cfg)
-    bot.reply_to(m, "✅ Ключи ЮKassa успешно сохранены! Автоматический SberPay и приём карт активны!")
+    bot.reply_to(m, "✅ Ключи ЮKassa сохранены! SberPay и карты работают автоматически!")
     show_admin_panel(m.chat.id)
 
 @bot.callback_query_handler(func=lambda c: c.data == "adm_change_price")
@@ -810,7 +831,7 @@ def step_adm_bc(m):
     bot.reply_to(m, f"✅ Доставлено {cnt} пользователям.")
     show_admin_panel(m.chat.id)
 
-print("\n>>> GENCALLS: АВТО-SBERPAY + БАНКОВСКИЕ КАРТЫ ЮКАССА ЗАПУЩЕНЫ! <<<")
+print("\n>>> GENCALLS: ЗАЩИТА АУДИОФАЙЛОВ ОТ СБРОСА СЕРВЕРА АКТИВНА! <<<")
 while True:
     try: bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception: time.sleep(2)
