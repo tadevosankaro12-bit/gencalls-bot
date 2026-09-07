@@ -814,4 +814,3 @@ print("\n>>> GENCALLS: АВТО-SBERPAY + БАНКОВСКИЕ КАРТЫ ЮКА
 while True:
     try: bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception: time.sleep(2)
-        
