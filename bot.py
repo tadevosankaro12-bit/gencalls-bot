@@ -41,10 +41,12 @@ def save_json(path, data):
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception: pass
 
-admin_cfg = load_json(CONFIG_FILE, {
+# Защищенные дефолтные настройки
+DEFAULT_CONFIG = {
     "call_price": 49,
     "max_referrals": 3,
     "admin_id": PRIMARY_ADMIN_ID,
+    "global_routing": "auto",  # auto / zvonok / smsru
     "crystal_auth_login": "dhdhe1728jd",
     "crystal_secret": "c5fdf612bfd5e816a1a7447d2b942a3b03e36c04",
     "crystal_salt": "a7e84e5da09dff11eb7be2ac0c6b83647a28efc1",
@@ -55,15 +57,19 @@ admin_cfg = load_json(CONFIG_FILE, {
     "campaign_id": "1783540036",
     "smsru_key": "92D687B8-1A07-CEB6-85CD-E0B1442FF4BF",
     "support": "tadevosankaro12"
-})
+}
+
+admin_cfg = load_json(CONFIG_FILE, DEFAULT_CONFIG)
+for k, v in DEFAULT_CONFIG.items():
+    if k not in admin_cfg:
+        admin_cfg[k] = v
 save_json(CONFIG_FILE, admin_cfg)
 
 db = load_json(DB_FILE, {})
 promocodes = load_json(PROMO_FILE, {"GEN2026": {"rub": 49, "uses": 100, "used_by": []}})
 blacklist = load_json(BLACKLIST_FILE, [])
 
-# ================= ВЕЧНОЕ ОБЛАЧНОЕ ХРАНИЛИЩЕ АУДИО =================
-# Эти ссылки и file_id никогда не удалятся при перезапуске сервера или обновлении с GitHub!
+# Вечные аудиофайлы
 PERMANENT_CLOUD_AUDIO = {
     "babka": "https://actions.google.com/sounds/v1/human_voices/screaming_female.ogg",
     "tulip": "https://actions.google.com/sounds/v1/human_voices/male_cheering.ogg",
@@ -102,7 +108,7 @@ PACKAGES = {
 
 def is_admin(uid):
     uid_str = str(uid).strip()
-    return uid_str in ADMIN_IDS or uid_str == PRIMARY_ADMIN_ID
+    return uid_str in ADMIN_IDS or uid_str == str(PRIMARY_ADMIN_ID)
 
 def get_user(uid, uname="Друг"):
     s_uid = str(uid).strip()
@@ -131,20 +137,17 @@ def parse_phone(text):
     return digits
 
 def get_audio_source(key):
-    # Сначала проверяем хранилище в памяти
     if key in audio_vault and audio_vault[key]:
         return audio_vault[key]
-    # Затем постоянные облачные ссылки
     if key in PERMANENT_CLOUD_AUDIO:
         return PERMANENT_CLOUD_AUDIO[key]
-    # Затем локальный файл
     fn = pranks_db.get(key, {}).get("file", f"{key}.mp3")
     local_p = os.path.join(AUDIO_DIR, fn)
     if os.path.exists(local_p):
         return local_p
     return PERMANENT_CLOUD_AUDIO.get("babka")
 
-# ================= ТЕЛЕФОНИЯ =================
+# ================= ШЛЮЗЫ ТЕЛЕФОНИИ =================
 def call_zvonok_campaign(phone):
     url = "https://zvonok.com/manager/cabapi_external/api/v1/phones/call/"
     params = {
@@ -211,10 +214,20 @@ def track_call_and_send_record(chat_id, call_id, phone, prank_title, service_typ
 def process_call_async(chat_id, phone, prank_key, p_title, wait_msg_id):
     u, _ = get_user(chat_id)
     price = admin_cfg.get("call_price", 49)
-    rmode = u.get("routing_mode", "auto")
-    use_service = "zvonok" if (rmode == "zvonok" or (rmode == "auto" and phone.startswith("7"))) else "smsru"
-    service_name = "🇷🇺 Zvonok (+7)" if use_service == "zvonok" else "🌍 SMS.RU Voice"
+    
+    # Проверяем глобальную и локальную маршрутизацию
+    global_mode = admin_cfg.get("global_routing", "auto")
+    user_mode = u.get("routing_mode", "auto")
+    rmode = user_mode if user_mode != "auto" else global_mode
 
+    if rmode == "zvonok":
+        use_service = "zvonok"
+    elif rmode == "smsru":
+        use_service = "smsru"
+    else:
+        use_service = "zvonok" if phone.startswith("7") else "smsru"
+
+    service_name = "🇷🇺 Zvonok (+7)" if use_service == "zvonok" else "🌍 SMS.RU Voice"
     success = False
     call_id = None
     service_type = "zvonok"
@@ -548,16 +561,26 @@ def cb_admin_panel(c):
 
 def show_admin_panel(chat_id, c=None):
     active_audios = len(audio_vault)
+    curr_routing = admin_cfg.get("global_routing", "auto")
+    routing_labels = {
+        "auto": "🔄 Авто (Zvonok для РФ / SMS.RU для мира)",
+        "zvonok": "🇷🇺 Только Zvonok",
+        "smsru": "🌍 Только SMS.RU"
+    }
+    
     text = (
-        "👑 Панель Управления GenCalls\n\n"
-        f"💳 Реквизиты для оплаты: `{admin_cfg.get('direct_bank_card')}`\n"
-        f"👤 Получатель: {admin_cfg.get('direct_recipient')}\n"
-        f"🎭 Розыгрышей в базе: {len(pranks_db)} шт.\n"
-        f"☁️ Облачных аудио: {active_audios} шт. (ЗАЩИЩЕНО НАВСЕГДА)\n"
-        f"🏷️ Цена звонка: {admin_cfg.get('call_price')} ₽\n"
-        f"👥 Пользователей: {len(db)}"
+        "👑 **Панель Управления GenCalls**\n\n"
+        f"⚙️ **Текущая маршрутизация:**\n👉 `{routing_labels.get(curr_routing, 'Авто')}`\n\n"
+        f"💳 **Реквизиты оплаты:** `{admin_cfg.get('direct_bank_card')}`\n"
+        f"👤 **Получатель:** {admin_cfg.get('direct_recipient')}\n"
+        f"🎭 **Розыгрышей:** {len(pranks_db)} шт.\n"
+        f"☁️ **Облачных аудио:** {active_audios} шт.\n"
+        f"🏷️ **Цена звонка:** {admin_cfg.get('call_price')} ₽\n"
+        f"👥 **Пользователей:** {len(db)}"
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
+    # ВОТ ОНА — НАСТРОЙКА МАРШРУТИЗАЦИИ НА САМОМ ВИДНОМ МЕСТЕ:
+    kb.row(types.InlineKeyboardButton("⚙️ Настройки маршрутизации", callback_data="adm_routing_settings"))
     kb.row(types.InlineKeyboardButton("💳 Изменить реквизиты Сбера", callback_data="adm_change_direct_bank"))
     kb.row(types.InlineKeyboardButton("🎭 Редактор розыгрышей", callback_data="adm_pranks_manager"))
     kb.row(types.InlineKeyboardButton("🎵 Загрузить аудио к пранку", callback_data="adm_upload_audio_menu"))
@@ -566,7 +589,37 @@ def show_admin_panel(chat_id, c=None):
     kb.row(types.InlineKeyboardButton("📢 Рассылка", callback_data="adm_broadcast"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
     if c: safe_nav(c, text, reply_markup=kb)
-    else: bot.send_message(chat_id, text, reply_markup=kb)
+    else: bot.send_message(chat_id, text, reply_markup=kb, parse_mode="Markdown")
+
+# ================= МЕНЮ МАРШРУТИЗАЦИИ =================
+@bot.callback_query_handler(func=lambda c: c.data == "adm_routing_settings")
+def on_routing_settings(c):
+    if not is_admin(c.message.chat.id): return
+    curr = admin_cfg.get("global_routing", "auto")
+    
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.row(types.InlineKeyboardButton(f"{'✅ ' if curr=='auto' else ''}🔄 Автоматически (Zvonok + SMS.RU)", callback_data="set_route_auto"))
+    kb.row(types.InlineKeyboardButton(f"{'✅ ' if curr=='zvonok' else ''}🇷🇺 Всегда через Zvonok (РФ звонки)", callback_data="set_route_zvonok"))
+    kb.row(types.InlineKeyboardButton(f"{'✅ ' if curr=='smsru' else ''}🌍 Всегда через SMS.RU", callback_data="set_route_smsru"))
+    kb.row(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_panel_open"))
+    
+    text = (
+        "⚙️ **НАСТРОЙКА МАРШРУТИЗАЦИИ ЗВОНКОВ**\n\n"
+        "Выберите через какой сервис бот будет совершать звонки по умолчанию:\n\n"
+        "• **Автоматически:** Номера +7 отправляются через Zvonok.com, а другие страны и резервные попытки — через SMS.RU.\n"
+        "• **Zvonok:** Все звонки идут через ваш кабинет Zvonok (кампания 1783540036).\n"
+        "• **SMS.RU:** Все звонки идут через Smart Voice шлюз SMS.RU."
+    )
+    safe_nav(c, text, reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("set_route_"))
+def on_set_route(c):
+    if not is_admin(c.message.chat.id): return
+    mode = c.data.replace("set_route_", "")
+    admin_cfg["global_routing"] = mode
+    save_json(CONFIG_FILE, admin_cfg)
+    bot.answer_callback_query(c.id, f"✅ Маршрутизация переключена на: {mode.upper()}!", show_alert=True)
+    on_routing_settings(c)
 
 @bot.callback_query_handler(func=lambda c: c.data == "adm_change_direct_bank")
 def on_adm_cdb(c):
@@ -587,7 +640,7 @@ def step_adm_direct_bank(m):
     bot.reply_to(m, "✅ Реквизиты для оплаты успешно обновлены!")
     show_admin_panel(m.chat.id)
 
-# ---- РЕДАКТОР РОЗЫГРЫШЕЙ С ВЕЧНЫМ ХРАНЕНИЕМ ----
+# ---- РЕДАКТОР РОЗЫГРЫШЕЙ ----
 @bot.callback_query_handler(func=lambda c: c.data == "adm_pranks_manager")
 def on_pranks_manager(c):
     if not is_admin(c.message.chat.id): return
@@ -765,7 +818,7 @@ def step_adm_bc(m):
     bot.reply_to(m, f"✅ Доставлено {cnt} пользователям.")
     show_admin_panel(m.chat.id)
 
-print("\n>>> GENCALLS: ВЕЧНОЕ ОБЛАЧНОЕ ХРАНИЛИЩЕ АУДИО АКТИВИРОВАНО! <<<")
+print("\n>>> GENCALLS: КНОПКА МАРШРУТИЗАЦИИ И ВЕЧНЫЕ НАСТРОЙКИ АКТИВНЫ! <<<")
 while True:
     try: bot.polling(none_stop=True, interval=0, timeout=20)
     except Exception: time.sleep(2)
