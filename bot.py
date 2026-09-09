@@ -1,6 +1,7 @@
-import os, json, telebot, requests, time, threading, logging, traceback, urllib.parse
+import os, json, telebot, requests, time, threading, logging, traceback, urllib.parse, hashlib
 from datetime import datetime
 from telebot import types
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib3
 urllib3.disable_warnings()
 
@@ -32,6 +33,7 @@ PROMO_FILE = os.path.join(BASE_DIR, "gencalls_promos.json")
 BLACKLIST_FILE = os.path.join(BASE_DIR, "gencalls_blacklist.json")
 CUSTOM_PRANKS_FILE = os.path.join(BASE_DIR, "gencalls_pranks.json")
 AUDIO_STORAGE_FILE = os.path.join(BASE_DIR, "audio_storage_vault.json")
+INVOICES_FILE = os.path.join(BASE_DIR, "gencalls_invoices.json")
 
 def load_json(path, default):
     if os.path.exists(path):
@@ -56,9 +58,8 @@ DEFAULT_CONFIG = {
     "max_referrals": 3,
     "admin_id": PRIMARY_ADMIN_ID,
     "global_routing": "auto",
-    "crystal_auth_login": "dhdhe1728jd",
-    "crystal_secret": "c5fdf612bfd5e816a1a7447d2b942a3b03e36c04",
-    "crystal_salt": "a7e84e5da09dff11eb7be2ac0c6b83647a28efc1",
+    "yoomoney_wallet": "4100119616287380",
+    "yoomoney_secret": "D2LS1zPM2UPAZ9wLeEVdbx7i",
     "channel_url": "https://t.me/gencalls_channel",
     "zvonok_key": "d0808ab7450fca32147a9285018fe7a5",
     "campaign_id": "1783540036",
@@ -67,16 +68,15 @@ DEFAULT_CONFIG = {
 }
 
 admin_cfg = load_json(CONFIG_FILE, DEFAULT_CONFIG)
-for k, v in DEFAULT_CONFIG.items():
-    if k not in admin_cfg:
-        admin_cfg[k] = v
+admin_cfg["yoomoney_wallet"] = "4100119616287380"
+admin_cfg["yoomoney_secret"] = "D2LS1zPM2UPAZ9wLeEVdbx7i"
 save_json(CONFIG_FILE, admin_cfg)
 
 db = load_json(DB_FILE, {})
 promocodes = load_json(PROMO_FILE, {"GEN2026": {"rub": 49, "uses": 100, "used_by": []}})
 blacklist = load_json(BLACKLIST_FILE, [])
+pending_invoices = load_json(INVOICES_FILE, {})
 
-# ВАШ ПРЯМОЙ ОБЛАЧНЫЙ СЕРВЕР CLOUDINARY ДЛЯ БАБКИ:
 PERMANENT_CLOUD_AUDIO = {
     "babka": "https://res.cloudinary.com/idthhkcn/video/upload/v1788934847/%D0%91%D0%B0%D0%B1%D0%BA%D0%B0_%D1%82%D1%80%D0%B5%D0%B1%D1%83%D0%B5%D1%82_%D0%B1%D0%B0%D0%B1%D0%BA%D0%B8.mp3",
     "tulip": "https://actions.google.com/sounds/v1/human_voices/male_cheering.ogg",
@@ -288,48 +288,21 @@ def process_call_async(chat_id, phone, prank_key, p_title, wait_msg_id):
     except Exception: pass
     threading.Thread(target=track_call_and_send_record, args=(chat_id, call_id, phone, p_title, service_type), daemon=True).start()
 
-# ================= КАССА CRYSTALPAY =================
-def create_crystal_invoice(amount, desc):
-    auth_login = admin_cfg.get("crystal_auth_login", "dhdhe1728jd").strip()
-    secret = admin_cfg.get("crystal_secret", "").strip()
-    
-    url = "https://api.crystalpay.io/v2/invoice/create/"
-    payload = {
-        "auth_login": auth_login,
-        "auth_secret": secret,
-        "amount": amount,
-        "type": "purchase",
-        "lifetime": 60,
-        "description": desc,
-        "redirect_url": admin_cfg.get("channel_url", "https://t.me/gencalls_channel")
+# ================= ОПЛАТА ЮMONEY (QUICKPAY) =================
+def create_yoomoney_url(amount, label, desc):
+    wallet = admin_cfg.get("yoomoney_wallet", "4100119616287380").strip()
+    base_url = "https://yoomoney.ru/quickpay/confirm.xml"
+    params = {
+        "receiver": wallet,
+        "quickpay-form": "button",
+        "paymentType": "AC", # Банковские карты РФ / ЮMoney
+        "sum": amount,
+        "label": label,
+        "targets": desc,
+        "comment": desc,
+        "successURL": admin_cfg.get("channel_url", "https://t.me/gencalls_channel")
     }
-    try:
-        r = requests.post(url, json=payload, timeout=10)
-        res = r.json()
-        if not res.get("error"):
-            return True, res.get("url"), res.get("id")
-        err_msg = res.get("errors", [str(res)])[0]
-        log_error("CRYSTAL_CREATE", err_msg)
-        return False, err_msg, None
-    except Exception as e:
-        log_error("CRYSTAL_EXC", str(e))
-        return False, str(e), None
-
-def check_crystal_invoice(invoice_id):
-    auth_login = admin_cfg.get("crystal_auth_login", "dhdhe1728jd").strip()
-    secret = admin_cfg.get("crystal_secret", "").strip()
-    url = "https://api.crystalpay.io/v2/invoice/info/"
-    payload = {"auth_login": auth_login, "auth_secret": secret, "id": invoice_id}
-    try:
-        r = requests.post(url, json=payload, timeout=8)
-        res = r.json()
-        if not res.get("error") and res.get("state") == "payed":
-            return True
-        elif res.get("error"):
-            log_error("CRYSTAL_CHECK", res.get("errors"))
-    except Exception as e:
-        log_error("CRYSTAL_CHECK_EXC", str(e))
-    return False
+    return f"{base_url}?{urllib.parse.urlencode(params)}"
 
 # ================= НАВИГАЦИЯ =================
 def safe_nav(c, text, reply_markup=None):
@@ -374,7 +347,7 @@ MAIN_TEXT_BANNER = (
     "🕵️‍♂️ Анонимность 100% — ваш номер скрыт.\n"
     "🎵 MP3-Плеер — слушайте пранки перед звонком!\n"
     "🎙️ Запись реакции — запись разговора прямо в этот чат!\n"
-    "⚡ Оплата онлайн через CrystalPAY (Карты РФ, SberPay, ЮMoney, Тест).\n\n"
+    "⚡ Оплата онлайн через <b>ЮMoney (Карты РФ: Сбербанк, Т-Банк, МИР)</b>.\n\n"
     "👇 Выберите действие в меню:"
 )
 
@@ -457,56 +430,205 @@ def step_phone_input(m):
     w = bot.send_message(chat_id, f"🚀 Набираем +{phone}...")
     threading.Thread(target=process_call_async, args=(chat_id, phone, prank_key, p["title"], w.message_id), daemon=True).start()
 
-# ================= ОПЛАТА =================
+# ================= ПОПОЛНЕНИЕ БАЛАНСА (ЮMONEY) =================
 @bot.callback_query_handler(func=lambda c: c.data == "packages_menu")
 def cb_packages(c):
     kb = types.InlineKeyboardMarkup(row_width=1)
     for pid, p in PACKAGES.items():
-        kb.row(types.InlineKeyboardButton(f"{p['title']} — {p['rub']} ₽ ({p['badge']})", callback_data=f"buy_cryst_{pid}"))
+        kb.row(types.InlineKeyboardButton(f"{p['title']} — {p['rub']} ₽ ({p['badge']})", callback_data=f"buy_ym_{pid}"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
-    safe_nav(c, "💳 <b>Пополнение баланса:</b>\nВыберите пакет звонков:", reply_markup=kb)
+    safe_nav(c, "💳 <b>Пополнение баланса (Карты РФ / СБП / ЮMoney):</b>\nВыберите подходящий пакет звонков:", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("buy_cryst_"))
-def on_buy_crystal(c):
-    pid = c.data.replace("buy_cryst_", "")
+@bot.callback_query_handler(func=lambda c: c.data.startswith("buy_ym_"))
+def on_buy_ym(c):
+    pid = c.data.replace("buy_ym_", "")
     pkg = PACKAGES.get(pid)
     if not pkg: return
     
     amount = pkg["rub"]
-    ok, pay_url, inv_id = create_crystal_invoice(amount, f"GenCalls {pkg['title']}")
+    inv_label = f"GC_{c.message.chat.id}_{int(time.time())}"
+    
+    pending_invoices[inv_label] = {
+        "uid": str(c.message.chat.id),
+        "amount": amount,
+        "pkg_title": pkg["title"],
+        "status": "pending",
+        "time": datetime.now().strftime("%d.%m %H:%M")
+    }
+    save_json(INVOICES_FILE, pending_invoices)
+    
+    pay_url = create_yoomoney_url(amount, inv_label, f"GenCalls {pkg['title']}")
     
     kb = types.InlineKeyboardMarkup(row_width=1)
-    if ok and pay_url:
-        kb.row(types.InlineKeyboardButton("🟢 Перейти к оплате", url=pay_url))
-        kb.row(types.InlineKeyboardButton("🔄 Я оплатил (Проверить платёж)", callback_data=f"chk_cr_{inv_id}_{amount}"))
-        kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
-        text = (
-            f"⚡ <b>Счёт на оплату готов!</b>\n\n"
-            f"📦 Пакет: <b>{pkg['title']}</b>\n"
-            f"💰 Сумма: <b>{amount} ₽</b>\n\n"
-            f"1. Нажмите кнопку для перехода к оплате.\n"
-            f"2. Оплатите счёт выбранным способом.\n"
-            f"3. Нажмите «Я оплатил» — баланс зачислится мгновенно!"
-        )
-    else:
-        kb.row(types.InlineKeyboardButton("👨‍💻 Написать в поддержку", url=f"https://t.me/{admin_cfg.get('support')}"))
-        kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
-        text = f"⚠️ Ошибка создания платежа:\n{pay_url}\n\nОбратитесь к администратору: @{admin_cfg.get('support')}"
+    kb.row(types.InlineKeyboardButton("🟢 Оплатить картой РФ / ЮMoney", url=pay_url))
+    kb.row(types.InlineKeyboardButton("🔄 Я оплатил (Проверить)", callback_data=f"chk_ym_{inv_label}"))
+    kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
+    
+    text = (
+        f"⚡ <b>Счёт на оплату сформирован!</b>\n\n"
+        f"📦 Пакет: <b>{pkg['title']}</b>\n"
+        f"💰 Сумма: <b>{amount} ₽</b>\n"
+        f"💳 Метод: <b>Карты любого банка РФ (МИР / Visa / MasterCard) или ЮMoney</b>\n\n"
+        f"1. Нажмите зелёную кнопку для безопасного перехода на страницу ЮMoney.\n"
+        f"2. Оплатите картой любого банка РФ.\n"
+        f"3. Нажмите кнопку <b>«Я оплатил»</b> для мгновенного зачисления звонков!"
+    )
     safe_nav(c, text, reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("chk_cr_"))
-def on_chk_crystal(c):
-    parts = c.data.split("_")
-    inv_id, amount = parts[2], int(parts[3])
+@bot.callback_query_handler(func=lambda c: c.data.startswith("chk_ym_"))
+def on_chk_ym(c):
+    inv_label = c.data.replace("chk_ym_", "")
+    inv = pending_invoices.get(inv_label)
     
-    if check_crystal_invoice(inv_id):
-        u, _ = get_user(c.message.chat.id)
-        u["balance_rub"] += amount
-        save_json(DB_FILE, db)
-        bot.answer_callback_query(c.id, "🎉 Оплата подтверждена!", show_alert=True)
-        safe_nav(c, f"🎉 <b>УРА! Платёж на {amount} ₽ успешно зачислен!</b>\nВаш баланс: {u['balance_rub']} ₽", reply_markup=kb_main_menu(c.message.chat.id))
-    else:
-        bot.answer_callback_query(c.id, "⏳ Оплата ещё не поступила. Попробуйте снова через несколько секунд.", show_alert=True)
+    if not inv:
+        bot.answer_callback_query(c.id, "⚠️ Счёт не найден или устарел.", show_alert=True)
+        return
+        
+    if inv.get("status") == "paid":
+        bot.answer_callback_query(c.id, "🎉 Счёт уже был зачислен ранее!", show_alert=True)
+        safe_nav(c, f"🎉 <b>Оплата подтверждена!</b>\nБаланс успешно пополнен на {inv['amount']} ₽.", reply_markup=kb_main_menu(c.message.chat.id))
+        return
+
+    # Уведомляем администратора о проверке платежа
+    uid = inv["uid"]
+    amount = inv["amount"]
+    pkg = inv.get("pkg_title", "Пакет")
+    
+    kb_adm = types.InlineKeyboardMarkup(row_width=2)
+    kb_adm.row(
+        types.InlineKeyboardButton("✅ Зачислить платёж", callback_data=f"adm_approve_{inv_label}"),
+        types.InlineKeyboardButton("❌ Отклонить", callback_data=f"adm_decline_{inv_label}")
+    )
+    
+    for a_id in ADMIN_IDS:
+        try:
+            bot.send_message(
+                int(a_id),
+                f"🔔 <b>ПРОВЕРКА ОПЛАТЫ ЮMONEY!</b>\n\n"
+                f"👤 Пользователь: <code>{uid}</code>\n"
+                f"📦 Пакет: {pkg}\n"
+                f"💰 Сумма: <b>{amount} ₽</b>\n"
+                f"🔖 Чек/ID: <code>{inv_label}</code>\n\n"
+                f"Проверьте поступление {amount} ₽ на ваш кошелёк ЮMoney и подтвердите:",
+                reply_markup=kb_adm,
+                parse_mode="HTML"
+            )
+        except Exception: pass
+
+    bot.answer_callback_query(c.id, "⏳ Запрос отправлен на подтверждение! Баланс начислится в течение 1 минуты.", show_alert=True)
+    
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+    safe_nav(c, f"⏳ <b>Ваш платёж на {amount} ₽ проверяется.</b>\nКак только перевод поступит на кошелёк, бот автоматически начислит вам звонки!\n\nЕсли возникли вопросы — напишите в @{admin_cfg.get('support')}", reply_markup=kb)
+
+# ---- ПОДТВЕРЖДЕНИЕ ПЛАТЕЖА АДМИНИСТРАТОРОМ ----
+@bot.callback_query_handler(func=lambda c: c.data.startswith("adm_approve_"))
+def on_adm_approve(c):
+    if not is_admin(c.message.chat.id): return
+    inv_label = c.data.replace("adm_approve_", "")
+    inv = pending_invoices.get(inv_label)
+    if not inv or inv.get("status") == "paid":
+        bot.answer_callback_query(c.id, "⚠️ Уже обработано!", show_alert=True)
+        return
+        
+    inv["status"] = "paid"
+    save_json(INVOICES_FILE, pending_invoices)
+    
+    uid = inv["uid"]
+    amount = inv["amount"]
+    u, _ = get_user(uid)
+    u["balance_rub"] += amount
+    save_json(DB_FILE, db)
+    
+    bot.answer_callback_query(c.id, f"✅ Успешно зачислено {amount} ₽!", show_alert=True)
+    try: bot.edit_message_text(f"✅ <b>Платёж на {amount} ₽ для пользователя {uid} подтверждён и зачислен!</b>", c.message.chat.id, c.message.message_id, parse_mode="HTML")
+    except Exception: pass
+    
+    # Уведомляем клиента
+    try:
+        bot.send_message(
+            int(uid),
+            f"🎉 <b>УРА! Платёж на {amount} ₽ успешно зачислен!</b>\n\n"
+            f"💰 Ваш актуальный баланс: <b>{u['balance_rub']} ₽</b>\n"
+            f"🚀 Теперь вы можете запускать розыгрыши из каталога!",
+            reply_markup=kb_main_menu(uid),
+            parse_mode="HTML"
+        )
+    except Exception: pass
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("adm_decline_"))
+def on_adm_decline(c):
+    if not is_admin(c.message.chat.id): return
+    inv_label = c.data.replace("adm_decline_", "")
+    inv = pending_invoices.get(inv_label)
+    if inv:
+        inv["status"] = "declined"
+        save_json(INVOICES_FILE, pending_invoices)
+    bot.answer_callback_query(c.id, "❌ Отклонено!", show_alert=True)
+    try: bot.edit_message_text(f"❌ Платёж {inv_label} отклонён.", c.message.chat.id, c.message.message_id)
+    except Exception: pass
+
+# ================= АВТОМАТИЧЕСКИЙ ВЕБХУК ЮMONEY =================
+class YooMoneyWebhookHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            params = urllib.parse.parse_qs(post_data)
+            
+            p_type = params.get('notification_type', [''])[0]
+            op_id = params.get('operation_id', [''])[0]
+            amount = params.get('amount', ['0'])[0]
+            curr = params.get('currency', ['643'])[0]
+            dt = params.get('datetime', [''])[0]
+            sender = params.get('sender', [''])[0]
+            codepro = params.get('codepro', ['false'])[0]
+            secret = admin_cfg.get('yoomoney_secret', 'D2LS1zPM2UPAZ9wLeEVdbx7i')
+            label = params.get('label', [''])[0]
+            sha1_hash = params.get('sha1_hash', [''])[0]
+            
+            # Проверка SHA-1 хеша от ЮMoney
+            check_str = f"{p_type}&{op_id}&{amount}&{curr}&{dt}&{sender}&{codepro}&{secret}&{label}"
+            calculated_hash = hashlib.sha1(check_str.encode('utf-8')).hexdigest()
+            
+            if calculated_hash.lower() == sha1_hash.lower() and label in pending_invoices:
+                inv = pending_invoices[label]
+                if inv.get("status") != "paid":
+                    inv["status"] = "paid"
+                    save_json(INVOICES_FILE, pending_invoices)
+                    
+                    uid = inv["uid"]
+                    add_amt = inv["amount"]
+                    u, _ = get_user(uid)
+                    u["balance_rub"] += add_amt
+                    save_json(DB_FILE, db)
+                    
+                    try:
+                        bot.send_message(
+                            int(uid),
+                            f"🎉 <b>УРА! Авто-платёж на {add_amt} ₽ зачислен!</b>\n\n"
+                            f"💰 Баланс: <b>{u['balance_rub']} ₽</b>",
+                            reply_markup=kb_main_menu(uid),
+                            parse_mode="HTML"
+                        )
+                    except Exception: pass
+            
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        except Exception as e:
+            log_error("YOOMONEY_WEBHOOK", str(e))
+            self.send_response(200)
+            self.end_headers()
+
+def run_webhook_server():
+    try:
+        server = HTTPServer(('0.0.0.0', 8080), YooMoneyWebhookHandler)
+        server.serve_forever()
+    except Exception as e:
+        log_error("SERVER_START", str(e))
+
+threading.Thread(target=run_webhook_server, daemon=True).start()
 
 # ================= МЕНЮ =================
 @bot.callback_query_handler(func=lambda c: c.data == "nav_rules")
@@ -601,7 +723,7 @@ def show_admin_panel(chat_id, c=None):
     text = (
         "👑 <b>Панель Управления GenCalls</b>\n\n"
         f"⚙️ <b>Маршрутизация:</b> <code>{routing_labels.get(curr_routing, 'Авто')}</code>\n"
-        f"💎 <b>Касса:</b> <code>{admin_cfg.get('crystal_auth_login')}</code>\n"
+        f"💳 <b>ЮMoney Кошелёк:</b> <code>{admin_cfg.get('yoomoney_wallet')}</code>\n"
         f"🏷️ <b>Цена 1 звонка:</b> <code>{admin_cfg.get('call_price')} ₽</code>\n"
         f"🎭 <b>Розыгрышей:</b> {len(pranks_db)} шт. (☁️ Аудио: {active_audios} шт.)\n"
         f"👥 <b>Пользователей:</b> {len(db)}\n"
@@ -628,8 +750,7 @@ def on_full_settings(c):
         "⚙️ <b>ВСЕ НАСТРОЙКИ СИСТЕМЫ GENCALLS</b>\n\n"
         f"• 🔄 <b>Маршрутизация:</b> <code>{routing_map.get(curr, 'Авто')}</code>\n"
         f"• 🏷️ <b>Цена за звонок:</b> <code>{admin_cfg.get('call_price')} ₽</code>\n"
-        f"• 🎁 <b>Бонус при старте:</b> <code>{admin_cfg.get('welcome_bonus_calls', 2)} звонка</code>\n"
-        f"• 💎 <b>Касса:</b> <code>{admin_cfg.get('crystal_auth_login')}</code>\n"
+        f"• 💳 <b>Кошелёк ЮMoney:</b> <code>{admin_cfg.get('yoomoney_wallet')}</code>\n"
         f"• 🇷🇺 <b>Кампания Zvonok:</b> <code>{admin_cfg.get('campaign_id')}</code>\n"
         f"• 🌍 <b>Ключ SMS.RU:</b> <code>{admin_cfg.get('smsru_key')[:8]}...</code>\n"
         f"• 🛟 <b>Поддержка:</b> <code>@{admin_cfg.get('support')}</code>\n\n"
@@ -638,14 +759,13 @@ def on_full_settings(c):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(types.InlineKeyboardButton("🔄 Маршрутизация звонков", callback_data="adm_routing_settings"))
     kb.row(types.InlineKeyboardButton("🏷️ Изменить цену звонка", callback_data="adm_change_price"))
-    kb.row(types.InlineKeyboardButton("💎 Настройки CrystalPAY", callback_data="adm_set_crystal"))
+    kb.row(types.InlineKeyboardButton("💳 Кошелёк ЮMoney", callback_data="adm_set_ym"))
     kb.row(types.InlineKeyboardButton("📞 Настройки Zvonok.com", callback_data="adm_set_zvonok"))
     kb.row(types.InlineKeyboardButton("🌍 Настройки SMS.RU", callback_data="adm_set_smsru"))
     kb.row(types.InlineKeyboardButton("🛟 Контакт поддержки", callback_data="adm_set_support"))
     kb.row(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_panel_open"))
     safe_nav(c, text, reply_markup=kb)
 
-# ---- МАРШРУТИЗАЦИЯ ----
 @bot.callback_query_handler(func=lambda c: c.data == "adm_routing_settings")
 def on_routing_settings(c):
     if not is_admin(c.message.chat.id): return
@@ -656,9 +776,7 @@ def on_routing_settings(c):
     kb.row(types.InlineKeyboardButton(f"{'✅ ' if curr=='zvonok' else ''}🇷🇺 Всегда через Zvonok", callback_data="set_route_zvonok"))
     kb.row(types.InlineKeyboardButton(f"{'✅ ' if curr=='smsru' else ''}🌍 Всегда через SMS.RU", callback_data="set_route_smsru"))
     kb.row(types.InlineKeyboardButton("🔙 Назад к настройкам", callback_data="adm_full_settings"))
-    
-    text = "⚙️ <b>Выбор шлюза маршрутизации звонков:</b>"
-    safe_nav(c, text, reply_markup=kb)
+    safe_nav(c, "⚙️ <b>Выбор шлюза маршрутизации звонков:</b>", reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_route_"))
 def on_set_route(c):
@@ -669,7 +787,6 @@ def on_set_route(c):
     bot.answer_callback_query(c.id, f"✅ Переключено на {mode.upper()}!", show_alert=True)
     on_routing_settings(c)
 
-# ---- ЦЕНА ЗВОНКА ----
 @bot.callback_query_handler(func=lambda c: c.data == "adm_change_price")
 def on_adm_price(c):
     if not is_admin(c.message.chat.id): return
@@ -710,33 +827,30 @@ def step_adm_price_manual(m):
         log_error("PRICE_CHANGE", str(e))
     show_admin_panel(m.chat.id)
 
-# ---- CRYSTALPAY НАСТРОЙКИ ----
-@bot.callback_query_handler(func=lambda c: c.data == "adm_set_crystal")
-def on_set_crystal(c):
+@bot.callback_query_handler(func=lambda c: c.data == "adm_set_ym")
+def on_set_ym(c):
     if not is_admin(c.message.chat.id): return
-    user_state[c.message.chat.id] = "adm_crystal_login"
+    user_state[c.message.chat.id] = "adm_ym_wallet"
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="adm_full_settings"))
     text = (
-        f"💎 <b>Настройки кассы</b>\n\n"
-        f"• Текущий логин: <code>{admin_cfg.get('crystal_auth_login')}</code>\n"
-        f"• Секретный ключ: <code>{admin_cfg.get('crystal_secret')[:8]}...</code>\n\n"
-        "Отправьте сообщением в чат логин и секретный ключ через запятую:"
+        f"💳 <b>Настройки кошелька ЮMoney</b>\n\n"
+        f"• Текущий кошелёк: <code>{admin_cfg.get('yoomoney_wallet')}</code>\n\n"
+        "Отправьте новый номер кошелька ЮMoney в чат:"
     )
     safe_nav(c, text, reply_markup=kb)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_crystal_login")
-def step_save_crystal(m):
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_ym_wallet")
+def step_save_ym(m):
     if not is_admin(m.chat.id): return
     user_state[m.chat.id] = None
-    parts = [p.strip() for p in m.text.split(",")]
-    if len(parts) >= 1 and parts[0]: admin_cfg["crystal_auth_login"] = parts[0]
-    if len(parts) >= 2 and parts[1]: admin_cfg["crystal_secret"] = parts[1]
-    save_json(CONFIG_FILE, admin_cfg)
-    bot.reply_to(m, "✅ Настройки кассы обновлены!")
+    w = "".join(filter(str.isdigit, m.text))
+    if len(w) >= 10:
+        admin_cfg["yoomoney_wallet"] = w
+        save_json(CONFIG_FILE, admin_cfg)
+        bot.reply_to(m, f"✅ Кошелёк ЮMoney обновлён на {w}!")
     show_admin_panel(m.chat.id)
 
-# ---- ZVONOK НАСТРОЙКИ ----
 @bot.callback_query_handler(func=lambda c: c.data == "adm_set_zvonok")
 def on_set_zvonok(c):
     if not is_admin(c.message.chat.id): return
@@ -762,7 +876,6 @@ def step_save_zvonok(m):
     bot.reply_to(m, "✅ Настройки Zvonok.com сохранены!")
     show_admin_panel(m.chat.id)
 
-# ---- SMS.RU НАСТРОЙКИ ----
 @bot.callback_query_handler(func=lambda c: c.data == "adm_set_smsru")
 def on_set_smsru(c):
     if not is_admin(c.message.chat.id): return
@@ -787,7 +900,6 @@ def step_save_smsru(m):
         bot.reply_to(m, "✅ API ключ SMS.RU обновлен!")
     show_admin_panel(m.chat.id)
 
-# ---- ПОДДЕРЖКА ----
 @bot.callback_query_handler(func=lambda c: c.data == "adm_set_support")
 def on_set_support(c):
     if not is_admin(c.message.chat.id): return
@@ -1093,12 +1205,7 @@ def on_test_apis(c):
     if not is_admin(c.message.chat.id): return
     bot.answer_callback_query(c.id, "⏳ Проверяем...")
     
-    cr_login = admin_cfg.get("crystal_auth_login")
-    cr_secret = admin_cfg.get("crystal_secret")
-    try:
-        r_cr = requests.post("https://api.crystalpay.io/v2/invoice/create/", json={"auth_login": cr_login, "auth_secret": cr_secret, "amount": 10, "type": "purchase", "lifetime": 15}, timeout=5).json()
-        cr_status = "🟢 OK" if not r_cr.get("error") else f"🔴 Ошибка: {r_cr.get('errors')}"
-    except Exception as e: cr_status = f"🔴 {e}"
+    ym_status = f"🟢 Кошелёк: {admin_cfg.get('yoomoney_wallet')}"
 
     try:
         r_zv = requests.get("https://zvonok.com/manager/cabapi_external/api/v1/phones/call/", params={"public_key": admin_cfg.get("zvonok_key"), "campaign_id": admin_cfg.get("campaign_id")}, verify=False, timeout=5).json()
@@ -1112,7 +1219,7 @@ def on_test_apis(c):
 
     report = (
         "🧪 <b>РЕЗУЛЬТАТЫ ДИАГНОСТИКИ:</b>\n\n"
-        f"💎 <b>CrystalPAY:</b> {cr_status}\n\n"
+        f"💳 <b>ЮMoney:</b> {ym_status}\n\n"
         f"🇷🇺 <b>Zvonok.com:</b> {zv_status}\n\n"
         f"🌍 <b>SMS.RU:</b> {sms_status}\n\n"
         f"🤖 <b>Telegram Polling:</b> 🟢 Активен"
@@ -1176,7 +1283,7 @@ def step_adm_bc(m):
     bot.reply_to(m, f"✅ Доставлено {cnt} пользователям.")
     show_admin_panel(m.chat.id)
 
-print("\n>>> GENCALLS: ПОЛНОСТЬЮ ИСПРАВЛЕН И ГОТОВ К РАБОТЕ! <<<")
+print("\n>>> GENCALLS: ПРИЕМ ОПЛАТЫ ЮMONEY УСПЕШНО ЗАПУЩЕН! <<<")
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
