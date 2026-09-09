@@ -1,4 +1,4 @@
-import os, json, telebot, requests, time, threading, logging, traceback
+import os, json, telebot, requests, time, threading, logging, traceback, urllib.parse
 from datetime import datetime
 from telebot import types
 import urllib3
@@ -76,8 +76,9 @@ db = load_json(DB_FILE, {})
 promocodes = load_json(PROMO_FILE, {"GEN2026": {"rub": 49, "uses": 100, "used_by": []}})
 blacklist = load_json(BLACKLIST_FILE, [])
 
+# ВАША СВЕЖАЯ ССЫЛКА НА CLOUDINARY ДЛЯ БАБКИ:
 PERMANENT_CLOUD_AUDIO = {
-    "babka": "https://actions.google.com/sounds/v1/human_voices/screaming_female.ogg",
+    "babka": "https://res.cloudinary.com/idthhkcn/video/upload/v1788934847/%D0%91%D0%B0%D0%B1%D0%BA%D0%B0_%D1%82%D1%80%D0%B5%D0%B1%D1%83%D0%B5%D1%82_%D0%B1%D0%B0%D0%B1%D0%BA%D0%B8.mp3",
     "tulip": "https://actions.google.com/sounds/v1/human_voices/male_cheering.ogg",
     "rkn": "https://actions.google.com/sounds/v1/emergency/siren_emergency.ogg",
     "django": "https://actions.google.com/sounds/v1/cartoon/whistling_slide.ogg",
@@ -86,6 +87,8 @@ PERMANENT_CLOUD_AUDIO = {
 }
 
 audio_vault = load_json(AUDIO_STORAGE_FILE, {})
+# Автоматически обновляем ссылку на бабку в хранилище
+audio_vault["babka"] = PERMANENT_CLOUD_AUDIO["babka"]
 for k, v in PERMANENT_CLOUD_AUDIO.items():
     if k not in audio_vault or not audio_vault[k]:
         audio_vault[k] = v
@@ -143,16 +146,25 @@ def parse_phone(text):
     elif len(digits) == 11 and digits.startswith("8"): return "7" + digits[1:]
     return digits
 
+def safe_url_encode(url):
+    if not url or not str(url).startswith("http"): return url
+    try:
+        parts = urllib.parse.urlsplit(url)
+        path = urllib.parse.quote(parts.path, safe="/:")
+        return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+    except Exception:
+        return url
+
 def get_audio_source(key):
     if key in audio_vault and audio_vault[key]:
-        return audio_vault[key]
+        return safe_url_encode(audio_vault[key])
     if key in PERMANENT_CLOUD_AUDIO:
-        return PERMANENT_CLOUD_AUDIO[key]
+        return safe_url_encode(PERMANENT_CLOUD_AUDIO[key])
     fn = pranks_db.get(key, {}).get("file", f"{key}.mp3")
     local_p = os.path.join(AUDIO_DIR, fn)
     if os.path.exists(local_p):
         return local_p
-    return PERMANENT_CLOUD_AUDIO.get("babka")
+    return safe_url_encode(PERMANENT_CLOUD_AUDIO.get("babka"))
 
 # ================= ШЛЮЗЫ ТЕЛЕФОНИИ =================
 def call_zvonok_campaign(phone):
@@ -594,7 +606,6 @@ def show_admin_panel(chat_id, c=None):
         f"🚨 **Ошибок в памяти:** {len(ERROR_LOGS)} шт."
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
-    # ГЛАВНЫЕ КНОПКИ:
     kb.row(types.InlineKeyboardButton("⚙️ НАСТРОЙКИ СИСТЕМЫ И КЛЮЧЕЙ", callback_data="adm_full_settings"))
     kb.row(types.InlineKeyboardButton("🎭 ПОЛНОЦЕННЫЙ РЕДАКТОР РОЗЫГРЫШЕЙ", callback_data="adm_pranks_manager"))
     kb.row(types.InlineKeyboardButton("🚨 ЖУРНАЛ ОШИБОК И ДИАГНОСТИКА", callback_data="adm_error_logs"))
@@ -851,7 +862,7 @@ def on_edit_single_prank(c):
     )
     kb.row(
         types.InlineKeyboardButton("📝 Изменить сценарий", callback_data=f"adm_ch_desc_{k}"),
-        types.InlineKeyboardButton("🎵 Заменить аудио (MP3)", callback_data=f"adm_ch_audio_{k}")
+        types.InlineKeyboardButton("🎵 Заменить аудио (MP3/Ссылка)", callback_data=f"adm_ch_audio_{k}")
     )
     pub_toggle_text = "🔒 Скрыть из каталога" if p.get("public", True) else "👁️ Сделать видимым"
     kb.row(types.InlineKeyboardButton(pub_toggle_text, callback_data=f"adm_toggle_pub_{k}"))
@@ -960,18 +971,28 @@ def on_ch_audio(c):
     p = pranks_db.get(k, {})
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data=f"adm_edit_prank_{k}"))
-    safe_nav(c, f"🎵 Отправьте аудиозапись (.mp3 или голосовое) для:\n\n🎭 **{p.get('title', k)}**\n\n(Оно навсегда сохранится в облаке)", reply_markup=kb)
+    safe_nav(c, f"🎵 Отправьте **прямую ссылку из Cloudinary** (или аудиофайл .mp3/голосовое) для:\n\n🎭 **{p.get('title', k)}**\n\n(Оно навсегда сохранится в облаке)", reply_markup=kb)
 
-@bot.message_handler(content_types=["audio", "voice", "document"], func=lambda m: user_state.get(m.chat.id) == "waiting_new_prank_audio")
+@bot.message_handler(content_types=["text", "audio", "voice", "document"], func=lambda m: user_state.get(m.chat.id) == "waiting_new_prank_audio")
 def step_save_new_audio(m):
     if not is_admin(m.chat.id): return
     user_state[m.chat.id] = None
     k = user_data.get(m.chat.id, {}).get("edit_k")
-    fid = m.audio.file_id if m.audio else (m.voice.file_id if m.voice else m.document.file_id)
-    if fid and k:
-        audio_vault[k] = fid
+    
+    val = None
+    if m.text and m.text.startswith("http"):
+        val = safe_url_encode(m.text.strip())
+    elif m.audio:
+        val = m.audio.file_id
+    elif m.voice:
+        val = m.voice.file_id
+    elif m.document:
+        val = m.document.file_id
+        
+    if val and k:
+        audio_vault[k] = val
         save_json(AUDIO_STORAGE_FILE, audio_vault)
-        bot.reply_to(m, f"🎉 УСПЕХ! Новое аудио привязано в облаке навсегда!")
+        bot.reply_to(m, f"🎉 УСПЕХ! Аудио/ссылка Cloudinary привязана к «{pranks_db.get(k, {}).get('title', k)}» навсегда!")
     show_admin_panel(m.chat.id)
 
 @bot.callback_query_handler(func=lambda c: c.data == "adm_prank_create_new")
@@ -994,17 +1015,26 @@ def step_prank_new_desc(m):
     if not is_admin(m.chat.id): return
     user_data[m.chat.id]["new_desc"] = m.text.strip()
     user_state[m.chat.id] = "adm_prank_new_audio"
-    bot.reply_to(m, "🎵 **Шаг 3 из 3:** Отправьте сюда MP3-аудиофайл или голосовое (сохранится в облако навсегда):")
+    bot.reply_to(m, "🎵 **Шаг 3 из 3:** Отправьте ссылку из Cloudinary или MP3 файл:")
 
-@bot.message_handler(content_types=["audio", "voice", "document"], func=lambda m: user_state.get(m.chat.id) == "adm_prank_new_audio")
+@bot.message_handler(content_types=["text", "audio", "voice", "document"], func=lambda m: user_state.get(m.chat.id) == "adm_prank_new_audio")
 def step_prank_new_audio(m):
     if not is_admin(m.chat.id): return
     user_state[m.chat.id] = None
     d = user_data.get(m.chat.id, {})
     k = d.get("new_key")
-    fid = m.audio.file_id if m.audio else (m.voice.file_id if m.voice else m.document.file_id)
     
-    if k and fid:
+    val = None
+    if m.text and m.text.startswith("http"):
+        val = safe_url_encode(m.text.strip())
+    elif m.audio:
+        val = m.audio.file_id
+    elif m.voice:
+        val = m.voice.file_id
+    elif m.document:
+        val = m.document.file_id
+    
+    if k and val:
         pranks_db[k] = {
             "title": d.get("new_title", "Новый розыгрыш"),
             "tag": "NEW 🔥",
@@ -1014,9 +1044,9 @@ def step_prank_new_audio(m):
             "public": True
         }
         save_json(CUSTOM_PRANKS_FILE, pranks_db)
-        audio_vault[k] = fid
+        audio_vault[k] = val
         save_json(AUDIO_STORAGE_FILE, audio_vault)
-        bot.reply_to(m, f"🎉 Розыгрыш «{d.get('new_title')}» успешно добавлен и опубликован в каталоге!")
+        bot.reply_to(m, f"🎉 Розыгрыш «{d.get('new_title')}» успешно опубликован в каталоге с вечным облачным аудио!")
         show_admin_panel(m.chat.id)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("adm_del_prank_"))
@@ -1138,16 +1168,3 @@ def step_adm_bc(m):
     for u in db.keys():
         try:
             bot.send_message(int(u), f"📢 {t}")
-            cnt += 1
-            time.sleep(0.04)
-        except Exception: pass
-    bot.reply_to(m, f"✅ Доставлено {cnt} пользователям.")
-    show_admin_panel(m.chat.id)
-
-print("\n>>> GENCALLS: ПОЛНЫЙ РАЗДЕЛ НАСТРОЕК + РЕДАКТОР ПРАНКОВ ЗАПУЩЕНЫ! <<<")
-while True:
-    try:
-        bot.polling(none_stop=True, interval=0, timeout=20)
-    except Exception as e:
-        log_error("POLLING_CRASH", f"{e}\n{traceback.format_exc()}")
-        time.sleep(2)
