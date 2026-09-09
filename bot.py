@@ -9,6 +9,7 @@ urllib3.disable_warnings()
 TOKEN = "8915393389:AAG7EE9V_QSMnTLoFtKli5YGofrLvmjO_PA"
 ADMIN_IDS = ["8682521929", "8915393389"]
 PRIMARY_ADMIN_ID = "8682521929"
+CHANNEL_URL = "https://t.me/Grey5g"
 
 bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=8)
 user_data = {}
@@ -60,7 +61,7 @@ DEFAULT_CONFIG = {
     "global_routing": "auto",
     "yoomoney_wallet": "4100119616287380",
     "yoomoney_secret": "D2LS1zPM2UPAZ9wLeEVdbx7i",
-    "channel_url": "https://t.me/gencalls_channel",
+    "channel_url": CHANNEL_URL,
     "zvonok_key": "d0808ab7450fca32147a9285018fe7a5",
     "campaign_id": "1783540036",
     "smsru_key": "92D687B8-1A07-CEB6-85CD-E0B1442FF4BF",
@@ -70,6 +71,7 @@ DEFAULT_CONFIG = {
 admin_cfg = load_json(CONFIG_FILE, DEFAULT_CONFIG)
 admin_cfg["yoomoney_wallet"] = "4100119616287380"
 admin_cfg["yoomoney_secret"] = "D2LS1zPM2UPAZ9wLeEVdbx7i"
+admin_cfg["channel_url"] = CHANNEL_URL
 save_json(CONFIG_FILE, admin_cfg)
 
 db = load_json(DB_FILE, {})
@@ -77,7 +79,8 @@ promocodes = load_json(PROMO_FILE, {"GEN2026": {"rub": 49, "uses": 100, "used_by
 blacklist = load_json(BLACKLIST_FILE, [])
 pending_invoices = load_json(INVOICES_FILE, {})
 
-PERMANENT_CLOUD_AUDIO = {
+# ================= ЖЕЛЕЗНОЕ ЗАКРЕПЛЕНИЕ АУДИО (НЕ ПРОПАДЕТ НИКОГДА) =================
+HARDCODED_PERMANENT_AUDIO = {
     "babka": "https://res.cloudinary.com/idthhkcn/video/upload/v1788934847/%D0%91%D0%B0%D0%B1%D0%BA%D0%B0_%D1%82%D1%80%D0%B5%D0%B1%D1%83%D0%B5%D1%82_%D0%B1%D0%B0%D0%B1%D0%BA%D0%B8.mp3",
     "tulip": "https://actions.google.com/sounds/v1/human_voices/male_cheering.ogg",
     "rkn": "https://actions.google.com/sounds/v1/emergency/siren_emergency.ogg",
@@ -87,10 +90,8 @@ PERMANENT_CLOUD_AUDIO = {
 }
 
 audio_vault = load_json(AUDIO_STORAGE_FILE, {})
-audio_vault["babka"] = PERMANENT_CLOUD_AUDIO["babka"]
-for k, v in PERMANENT_CLOUD_AUDIO.items():
-    if k not in audio_vault or not audio_vault[k]:
-        audio_vault[k] = v
+for k, v in HARDCODED_PERMANENT_AUDIO.items():
+    audio_vault[k] = v
 save_json(AUDIO_STORAGE_FILE, audio_vault)
 
 DEFAULT_PRANKS = {
@@ -155,15 +156,15 @@ def safe_url_encode(url):
         return url
 
 def get_audio_source(key):
+    if key in HARDCODED_PERMANENT_AUDIO:
+        return safe_url_encode(HARDCODED_PERMANENT_AUDIO[key])
     if key in audio_vault and audio_vault[key]:
         return safe_url_encode(audio_vault[key])
-    if key in PERMANENT_CLOUD_AUDIO:
-        return safe_url_encode(PERMANENT_CLOUD_AUDIO[key])
     fn = pranks_db.get(key, {}).get("file", f"{key}.mp3")
     local_p = os.path.join(AUDIO_DIR, fn)
     if os.path.exists(local_p):
         return local_p
-    return safe_url_encode(PERMANENT_CLOUD_AUDIO.get("babka"))
+    return safe_url_encode(HARDCODED_PERMANENT_AUDIO["babka"])
 
 # ================= ШЛЮЗЫ ТЕЛЕФОНИИ =================
 def call_zvonok_campaign(phone):
@@ -288,19 +289,19 @@ def process_call_async(chat_id, phone, prank_key, p_title, wait_msg_id):
     except Exception: pass
     threading.Thread(target=track_call_and_send_record, args=(chat_id, call_id, phone, p_title, service_type), daemon=True).start()
 
-# ================= ОПЛАТА ЮMONEY (QUICKPAY) =================
-def create_yoomoney_url(amount, label, desc):
+# ================= ГЕНЕРАТОР ПЛАТЁЖНЫХ ССЫЛОК ЮMONEY =================
+def create_yoomoney_url(amount, label, desc, payment_type="AC"):
     wallet = admin_cfg.get("yoomoney_wallet", "4100119616287380").strip()
     base_url = "https://yoomoney.ru/quickpay/confirm.xml"
     params = {
         "receiver": wallet,
         "quickpay-form": "button",
-        "paymentType": "AC", # Банковские карты РФ / ЮMoney
+        "paymentType": payment_type,
         "sum": amount,
         "label": label,
         "targets": desc,
         "comment": desc,
-        "successURL": admin_cfg.get("channel_url", "https://t.me/gencalls_channel")
+        "successURL": CHANNEL_URL
     }
     return f"{base_url}?{urllib.parse.urlencode(params)}"
 
@@ -337,29 +338,77 @@ def kb_main_menu(uid):
         types.InlineKeyboardButton("🛡️ Анти-Пранк", callback_data="anti_prank")
     )
     kb.row(
-        types.InlineKeyboardButton("📢 Telegram-канал", url=admin_cfg.get("channel_url", "https://t.me/gencalls_channel"))
+        types.InlineKeyboardButton("📢 Наш Telegram-канал", url=CHANNEL_URL)
     )
     return kb
 
-MAIN_TEXT_BANNER = (
-    "🎭 <b>GenCalls — Пранк-Звонки с записью реакции!</b>\n\n"
-    "🎁 Вам начислено 2 БЕСПЛАТНЫХ ЗВОНКА в подарок!\n\n"
-    "🕵️‍♂️ Анонимность 100% — ваш номер скрыт.\n"
-    "🎵 MP3-Плеер — слушайте пранки перед звонком!\n"
-    "🎙️ Запись реакции — запись разговора прямо в этот чат!\n"
-    "⚡ Оплата онлайн через <b>ЮMoney (Карты РФ: Сбербанк, Т-Банк, МИР)</b>.\n\n"
-    "👇 Выберите действие в меню:"
-)
+def get_main_text(is_new=False):
+    bonus_txt = "🎁 <b>Вам начислено 2 БЕСПЛАТНЫХ ЗВОНКА в подарок!</b>\n\n" if is_new else ""
+    return (
+        f"🎭 <b>GenCalls — Пранк-Звонки с записью реакции!</b>\n\n"
+        f"{bonus_txt}"
+        "🕵️‍♂️ Анонимность 100% — ваш номер скрыт.\n"
+        "🎵 MP3-Плеер — слушайте пранки перед звонком!\n"
+        "🎙️ Запись реакции — запись разговора прямо в этот чат!\n"
+        "⚡ Оплата онлайн через <b>ЮMoney (Карты РФ, СБП, Кошелёк)</b>.\n\n"
+        "👇 Выберите действие в меню:"
+    )
 
-# ================= КОМАНДЫ =================
+# ================= 4 ОСНОВНЫЕ КОМАНДЫ =================
 @bot.message_handler(commands=["start", "menu"])
 def cmd_start(m):
     user_state[m.chat.id] = None
     u, is_new = get_user(m.chat.id, m.from_user.first_name or "Друг")
-    welcome = MAIN_TEXT_BANNER
-    if is_new:
-        welcome = f"🎉 <b>Добро пожаловать в GenCalls!</b>\n\n🎁 Мы подарили вам 2 БЕСПЛАТНЫХ ЗВОНКА!\n\n" + MAIN_TEXT_BANNER
-    bot.send_message(m.chat.id, welcome, reply_markup=kb_main_menu(m.chat.id), parse_mode="HTML")
+    bot.send_message(m.chat.id, get_main_text(is_new), reply_markup=kb_main_menu(m.chat.id), parse_mode="HTML")
+
+@bot.message_handler(commands=["catalog", "pranks"])
+def cmd_catalog(m):
+    user_state[m.chat.id] = None
+    kb = types.InlineKeyboardMarkup()
+    for k, v in pranks_db.items():
+        if v.get("public", True):
+            kb.row(types.InlineKeyboardButton(f"🎵 {v['title']} [{v.get('tag', 'ТОП')}]", callback_data=f"open_prank_{k}"))
+    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+    bot.send_message(m.chat.id, "🎭 <b>Каталог голосовых розыгрышей:</b>\nВыберите любой для прослушивания:", reply_markup=kb, parse_mode="HTML")
+
+@bot.message_handler(commands=["account", "profile", "balance"])
+def cmd_account(m):
+    user_state[m.chat.id] = None
+    u, _ = get_user(m.chat.id)
+    price = admin_cfg.get("call_price", 49)
+    bal_rub = u.get("balance_rub", 0)
+    bal_calls = bal_rub // price
+    
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("💳 Пополнить баланс", callback_data="packages_menu"))
+    kb.row(types.InlineKeyboardButton("🎉 Каталог розыгрышей", callback_data="catalog"))
+    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+    
+    text = (
+        "👤 <b>Ваш личный профиль:</b>\n\n"
+        f"🆔 ID: <code>{m.chat.id}</code>\n"
+        f"💰 Баланс: <b>{bal_rub} ₽</b> ({bal_calls} звонков)\n"
+        f"📞 Совершено звонков: <b>{len(u.get('calls_history', []))}</b> шт.\n"
+        f"📅 Дата регистрации: <code>{u.get('reg_date', 'Недавно')}</code>"
+    )
+    bot.send_message(m.chat.id, text, reply_markup=kb, parse_mode="HTML")
+
+@bot.message_handler(commands=["help", "support"])
+def cmd_help(m):
+    user_state[m.chat.id] = None
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("👨‍💻 Написать администратору", url=f"https://t.me/{admin_cfg.get('support')}"))
+    kb.row(types.InlineKeyboardButton("📢 Наш Telegram-канал", url=CHANNEL_URL))
+    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+    
+    help_text = (
+        "🛟 <b>Центр помощи и поддержки GenCalls</b>\n\n"
+        "• <b>Как заказать звонок?</b> Откройте /catalog, выберите розыгрыш, послушайте и нажмите «Позвонить жертве».\n"
+        "• <b>Куда придёт запись?</b> Запись разговора придёт прямо в этот чат сразу после завершения звонка!\n"
+        "• <b>Виден ли мой номер?</b> Нет, сервис работает через виртуальные номера, ваш личный номер на 100% скрыт.\n\n"
+        f"По всем вопросам и пополнению пишите: @{admin_cfg.get('support')}"
+    )
+    bot.send_message(m.chat.id, help_text, reply_markup=kb, parse_mode="HTML")
 
 # ================= КАТАЛОГ =================
 @bot.callback_query_handler(func=lambda c: c.data == "catalog")
@@ -437,7 +486,7 @@ def cb_packages(c):
     for pid, p in PACKAGES.items():
         kb.row(types.InlineKeyboardButton(f"{p['title']} — {p['rub']} ₽ ({p['badge']})", callback_data=f"buy_ym_{pid}"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
-    safe_nav(c, "💳 <b>Пополнение баланса (Карты РФ / СБП / ЮMoney):</b>\nВыберите подходящий пакет звонков:", reply_markup=kb)
+    safe_nav(c, "💳 <b>Пополнение баланса ЮMoney:</b>\nВыберите желаемый пакет звонков:", reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("buy_ym_"))
 def on_buy_ym(c):
@@ -457,21 +506,25 @@ def on_buy_ym(c):
     }
     save_json(INVOICES_FILE, pending_invoices)
     
-    pay_url = create_yoomoney_url(amount, inv_label, f"GenCalls {pkg['title']}")
+    url_cards = create_yoomoney_url(amount, inv_label, f"GenCalls {pkg['title']}", "AC")
+    url_wallet = create_yoomoney_url(amount, inv_label, f"GenCalls {pkg['title']}", "PC")
     
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.row(types.InlineKeyboardButton("🟢 Оплатить картой РФ / ЮMoney", url=pay_url))
-    kb.row(types.InlineKeyboardButton("🔄 Я оплатил (Проверить)", callback_data=f"chk_ym_{inv_label}"))
+    kb.row(types.InlineKeyboardButton("💳 Оплатить банковской картой РФ / СБП", url=url_cards))
+    kb.row(types.InlineKeyboardButton("🟣 Оплатить кошельком ЮMoney", url=url_wallet))
+    kb.row(types.InlineKeyboardButton("🔄 Я оплатил (Проверить платёж)", callback_data=f"chk_ym_{inv_label}"))
     kb.row(types.InlineKeyboardButton("🔙 Назад к пакетам", callback_data="packages_menu"))
     
     text = (
         f"⚡ <b>Счёт на оплату сформирован!</b>\n\n"
         f"📦 Пакет: <b>{pkg['title']}</b>\n"
-        f"💰 Сумма: <b>{amount} ₽</b>\n"
-        f"💳 Метод: <b>Карты любого банка РФ (МИР / Visa / MasterCard) или ЮMoney</b>\n\n"
-        f"1. Нажмите зелёную кнопку для безопасного перехода на страницу ЮMoney.\n"
-        f"2. Оплатите картой любого банка РФ.\n"
-        f"3. Нажмите кнопку <b>«Я оплатил»</b> для мгновенного зачисления звонков!"
+        f"💰 К оплате: <b>{amount} ₽</b>\n"
+        f"💳 Получатель: <code>{admin_cfg.get('yoomoney_wallet')}</code>\n\n"
+        f"<b>Доступные способы:</b>\n"
+        f"• Банковские карты (МИР, Сбер, Т-Банк, ВТБ)\n"
+        f"• Система быстрых платежей (СБП / QR-код)\n"
+        f"• Кошелёк ЮMoney\n\n"
+        f"Нажмите кнопку оплаты выше, а после завершения нажмите <b>«Я оплатил»</b> для зачисления!"
     )
     safe_nav(c, text, reply_markup=kb)
 
@@ -485,11 +538,10 @@ def on_chk_ym(c):
         return
         
     if inv.get("status") == "paid":
-        bot.answer_callback_query(c.id, "🎉 Счёт уже был зачислен ранее!", show_alert=True)
+        bot.answer_callback_query(c.id, "🎉 Оплата уже подтверждена!", show_alert=True)
         safe_nav(c, f"🎉 <b>Оплата подтверждена!</b>\nБаланс успешно пополнен на {inv['amount']} ₽.", reply_markup=kb_main_menu(c.message.chat.id))
         return
 
-    # Уведомляем администратора о проверке платежа
     uid = inv["uid"]
     amount = inv["amount"]
     pkg = inv.get("pkg_title", "Пакет")
@@ -544,7 +596,6 @@ def on_adm_approve(c):
     try: bot.edit_message_text(f"✅ <b>Платёж на {amount} ₽ для пользователя {uid} подтверждён и зачислен!</b>", c.message.chat.id, c.message.message_id, parse_mode="HTML")
     except Exception: pass
     
-    # Уведомляем клиента
     try:
         bot.send_message(
             int(uid),
@@ -587,7 +638,6 @@ class YooMoneyWebhookHandler(BaseHTTPRequestHandler):
             label = params.get('label', [''])[0]
             sha1_hash = params.get('sha1_hash', [''])[0]
             
-            # Проверка SHA-1 хеша от ЮMoney
             check_str = f"{p_type}&{op_id}&{amount}&{curr}&{dt}&{sender}&{codepro}&{secret}&{label}"
             calculated_hash = hashlib.sha1(check_str.encode('utf-8')).hexdigest()
             
@@ -630,7 +680,7 @@ def run_webhook_server():
 
 threading.Thread(target=run_webhook_server, daemon=True).start()
 
-# ================= МЕНЮ =================
+# ================= КНОПКИ МЕНЮ =================
 @bot.callback_query_handler(func=lambda c: c.data == "nav_rules")
 def cb_rules(c):
     rules_text = (
@@ -657,6 +707,7 @@ def cb_account(c):
 def cb_help(c):
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("👨‍💻 Написать администратору", url=f"https://t.me/{admin_cfg.get('support')}"))
+    kb.row(types.InlineKeyboardButton("📢 Наш Telegram-канал", url=CHANNEL_URL))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
     safe_nav(c, f"🛟 <b>Служба заботы и поддержки:</b>\n\nПо любым вопросам пишите: @{admin_cfg.get('support')}", reply_markup=kb)
 
@@ -701,7 +752,7 @@ def step_bl(m):
 @bot.callback_query_handler(func=lambda c: c.data == "back_main")
 def on_back(c):
     user_state[c.message.chat.id] = None
-    safe_nav(c, MAIN_TEXT_BANNER, reply_markup=kb_main_menu(c.message.chat.id))
+    safe_nav(c, get_main_text(), reply_markup=kb_main_menu(c.message.chat.id))
 
 # ================= АДМИН-ПАНЕЛЬ (/admin) =================
 @bot.message_handler(commands=["admin"])
@@ -724,6 +775,7 @@ def show_admin_panel(chat_id, c=None):
         "👑 <b>Панель Управления GenCalls</b>\n\n"
         f"⚙️ <b>Маршрутизация:</b> <code>{routing_labels.get(curr_routing, 'Авто')}</code>\n"
         f"💳 <b>ЮMoney Кошелёк:</b> <code>{admin_cfg.get('yoomoney_wallet')}</code>\n"
+        f"📢 <b>Канал:</b> <code>{CHANNEL_URL}</code>\n"
         f"🏷️ <b>Цена 1 звонка:</b> <code>{admin_cfg.get('call_price')} ₽</code>\n"
         f"🎭 <b>Розыгрышей:</b> {len(pranks_db)} шт. (☁️ Аудио: {active_audios} шт.)\n"
         f"👥 <b>Пользователей:</b> {len(db)}\n"
@@ -739,7 +791,7 @@ def show_admin_panel(chat_id, c=None):
     if c: safe_nav(c, text, reply_markup=kb)
     else: bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
 
-# ================= ПОЛНЫЙ РАЗДЕЛ НАСТРОЕК =================
+# ================= РАЗДЕЛ НАСТРОЕК =================
 @bot.callback_query_handler(func=lambda c: c.data == "adm_full_settings")
 def on_full_settings(c):
     if not is_admin(c.message.chat.id): return
@@ -751,6 +803,7 @@ def on_full_settings(c):
         f"• 🔄 <b>Маршрутизация:</b> <code>{routing_map.get(curr, 'Авто')}</code>\n"
         f"• 🏷️ <b>Цена за звонок:</b> <code>{admin_cfg.get('call_price')} ₽</code>\n"
         f"• 💳 <b>Кошелёк ЮMoney:</b> <code>{admin_cfg.get('yoomoney_wallet')}</code>\n"
+        f"• 📢 <b>Ссылка на канал:</b> <code>{CHANNEL_URL}</code>\n"
         f"• 🇷🇺 <b>Кампания Zvonok:</b> <code>{admin_cfg.get('campaign_id')}</code>\n"
         f"• 🌍 <b>Ключ SMS.RU:</b> <code>{admin_cfg.get('smsru_key')[:8]}...</code>\n"
         f"• 🛟 <b>Поддержка:</b> <code>@{admin_cfg.get('support')}</code>\n\n"
@@ -770,7 +823,6 @@ def on_full_settings(c):
 def on_routing_settings(c):
     if not is_admin(c.message.chat.id): return
     curr = admin_cfg.get("global_routing", "auto")
-    
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.row(types.InlineKeyboardButton(f"{'✅ ' if curr=='auto' else ''}🔄 Авто (Zvonok для РФ / SMS.RU для мира)", callback_data="set_route_auto"))
     kb.row(types.InlineKeyboardButton(f"{'✅ ' if curr=='zvonok' else ''}🇷🇺 Всегда через Zvonok", callback_data="set_route_zvonok"))
@@ -919,7 +971,7 @@ def step_save_support(m):
         bot.reply_to(m, f"✅ Поддержка установлена на @{u}!")
     show_admin_panel(m.chat.id)
 
-# ================= ПОЛНОЦЕННЫЙ РЕДАКТОР РОЗЫГРЫШЕЙ =================
+# ================= РЕДАКТОР РОЗЫГРЫШЕЙ =================
 @bot.callback_query_handler(func=lambda c: c.data == "adm_pranks_manager")
 def on_pranks_manager(c):
     if not is_admin(c.message.chat.id): return
@@ -1222,6 +1274,7 @@ def on_test_apis(c):
         f"💳 <b>ЮMoney:</b> {ym_status}\n\n"
         f"🇷🇺 <b>Zvonok.com:</b> {zv_status}\n\n"
         f"🌍 <b>SMS.RU:</b> {sms_status}\n\n"
+        f"📢 <b>Telegram-канал:</b> {CHANNEL_URL}\n\n"
         f"🤖 <b>Telegram Polling:</b> 🟢 Активен"
     )
     kb = types.InlineKeyboardMarkup()
@@ -1283,7 +1336,18 @@ def step_adm_bc(m):
     bot.reply_to(m, f"✅ Доставлено {cnt} пользователям.")
     show_admin_panel(m.chat.id)
 
-print("\n>>> GENCALLS: ПРИЕМ ОПЛАТЫ ЮMONEY УСПЕШНО ЗАПУЩЕН! <<<")
+# ================= РЕГИСТРАЦИЯ КОМАНД В МЕНЮ TELEGRAM =================
+try:
+    bot.set_my_commands([
+        types.BotCommand("start", "🏠 Главное меню и баланс"),
+        types.BotCommand("catalog", "🎭 Каталог розыгрышей"),
+        types.BotCommand("account", "👤 Личный кабинет и история"),
+        types.BotCommand("help", "🛟 Помощь и поддержка")
+    ])
+except Exception as e:
+    log_error("SET_MY_COMMANDS", str(e))
+
+print("\n>>> GENCALLS: КАНАЛ t.me/Grey5g + АУДИО НАМЕРТВО + ЮMONEY ОБНОВЛЁН! <<<")
 while True:
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
