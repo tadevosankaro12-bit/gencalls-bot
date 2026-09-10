@@ -907,4 +907,4 @@ def on_adm_edit_prank(c):
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton(pub_btn, callback_data=f"adm_toggle_prank_{k}"))
     kb.row(types.InlineKeyboardButton("🚀 Протестировать звонок", callback_data=f"setup_call_{k}"))
-    if not
+    iif not p: return
