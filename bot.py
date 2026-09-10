@@ -1,5 +1,6 @@
 import os, json, time, threading, logging, hashlib, urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
 from datetime import datetime
 import telebot
 from telebot import types
@@ -39,16 +40,16 @@ def save_json(path, data):
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception: pass
 
-TOKEN = "8915393389:AAG7EE9V_QSMnTLoFtKli5YGofrLvmjO_PA"
-ZVONOK_API_KEY = "d0808ab7450fca32147a9285018fe7a5"
-CAMPAIGN_ID = "1783540036"
-SMSRU_API_KEY = "92D687B8-1A07-CEB6-85CD-E0B1442FF4BF"
+TOKEN = os.getenv("TELEGRAM_TOKEN", "8915393389:AAG7EE9V_QSMnTLoFtKli5YGofrLvmjO_PA")
+ZVONOK_API_KEY = os.getenv("ZVONOK_API_KEY", "d0808ab7450fca32147a9285018fe7a5")
+CAMPAIGN_ID = os.getenv("CAMPAIGN_ID", "1783540036")
+SMSRU_API_KEY = os.getenv("SMSRU_API_KEY", "92D687B8-1A07-CEB6-85CD-E0B1442FF4BF")
 
-YOOMONEY_WALLET = "4100119616287380"
-YOOMONEY_SECRET = "D2LS1zPM2UPAZ9wLeEVdbx7i"
-LAVA_PAY_URL = "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967"
+YOOMONEY_WALLET = os.getenv("YOOMONEY_WALLET", "4100119616287380")
+YOOMONEY_SECRET = os.getenv("YOOMONEY_SECRET", "D2LS1zPM2UPAZ9wLeEVdbx7i")
+LAVA_PAY_URL = os.getenv("LAVA_PAY_URL", "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967")
 pending_payments = load_json(PENDING_PAYMENTS_FILE, {})
-SUPPORT_USERNAME = "tadevosankaro12"
+SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "tadevosankaro12")
 
 bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=8)
 user_data = {}
@@ -169,7 +170,7 @@ def parse_phone(raw):
         clean = "7" + clean[1:]
     return clean
 
-# ---- СИСТЕМА ОПЛАТЫ YOOMONEY И ВЕБХУКИ ----
+# ---- СИСТЕМА ОПЛАТЫ YOOMONEY ----
 def create_yoomoney_payment(user_id, amount_rub, comment=""):
     import uuid
     pay_id = f"ym_{user_id}_{uuid.uuid4().hex[:8]}"
@@ -324,7 +325,7 @@ def cmd_start(m):
         save_json(CONFIG_FILE, admin_cfg)
     bot.send_message(m.chat.id, MAIN_TEXT_BANNER, parse_mode="Markdown", reply_markup=kb_main_menu(m.chat.id))
 
-# ---- МАРШРУТИЗАЦИЯ НАПРАВЛЕНИЙ (+7 И МЕЖДУНАРОДНЫЙ) ----
+# ---- МАРШРУТИЗАЦИЯ ----
 @bot.message_handler(commands=["routing"])
 def cmd_routing(m):
     show_routing_menu(m.chat.id)
@@ -412,7 +413,7 @@ def on_open_prank(c):
     )
     safe_nav(c, text, reply_markup=kb)
 
-# ---- ЗВОНКИ ЧЕРЕЗ ШЛЮЗЫ ZVONOK И SMS.RU ----
+# ---- ЗВОНКИ ЧЕРЕЗ ШЛЮЗЫ ----
 @bot.callback_query_handler(func=lambda c: c.data.startswith("setup_call_"))
 def on_setup_call(c):
     chat_id = c.message.chat.id
@@ -766,7 +767,7 @@ def on_back_main(c):
     user_state[c.message.chat.id] = None
     safe_nav(c, MAIN_TEXT_BANNER, reply_markup=kb_main_menu(c.message.chat.id))
 
-# ================= ПОЛНОЦЕННАЯ АДМИН-ПАНЕЛЬ И СТУДИЯ АУДИО =================
+# ================= АДМИН-ПАНЕЛЬ И СТУДИЯ АУДИО =================
 @bot.message_handler(commands=["admin"])
 def cmd_admin(m):
     if not is_admin(m.chat.id): return
@@ -787,9 +788,9 @@ def show_admin_panel(chat_id, c=None):
         f"📞 Всего звонков совершено: **{total_calls}**\n"
         f"💰 Общий баланс пользователей: **{total_rub} ₽**\n"
         f"🏷️ Текущая цена 1 звонка: **{CALL_PRICE_RUB} ₽**\n"
-        f"🌐 Баланс SMS.RU (Армения/Мир): **43.2 ₽**\n"
-        f"🎙️ Всего пранков в базе: **{len(pranks_db)}**\n"
-        f"🎟️ Созданных промокодов: **{len(promocodes)}**"
+        f"🌐 Баланс SMS.RU: **43.2 ₽**\n"
+        f"🎙️ Всего пранков: **{len(pranks_db)}**\n"
+        f"🎟️ Промокодов: **{len(promocodes)}**"
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(types.InlineKeyboardButton("🎙️ Студия Аудиозаписей & Пранков", callback_data="adm_manage_audios"))
@@ -810,7 +811,7 @@ def show_admin_panel(chat_id, c=None):
     if c: safe_nav(c, text, reply_markup=kb)
     else: bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
 
-# ---- СТУДИЯ АУДИОЗАПИСЕЙ И ПУБЛИКАЦИИ ----
+# ---- СТУДИЯ АУДИОЗАПИСЕЙ ----
 @bot.callback_query_handler(func=lambda c: c.data == "adm_manage_audios")
 def on_adm_audios(c):
     if not is_admin(c.message.chat.id): return
@@ -823,7 +824,7 @@ def on_adm_audios(c):
         kb.row(types.InlineKeyboardButton(f"{v['title']} ({icon})", callback_data=f"adm_edit_prank_{k}"))
         
     kb.row(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_panel_open"))
-    safe_nav(c, "🎙️ **Студия управления пранками и аудиофайлами:**\n\nВы можете загружать новые аудио, скрывать пранки от пользователей или публиковать их:", reply_markup=kb)
+    safe_nav(c, "🎙️ **Студия управления пранками:**", reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data == "adm_upload_new_audio")
 def on_adm_upload(c):
@@ -831,7 +832,7 @@ def on_adm_upload(c):
     user_state[c.message.chat.id] = "adm_waiting_audio_file"
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="adm_manage_audios"))
-    safe_nav(c, "🎙️ **Загрузка нового пранка:**\n\nОтправьте в чат **аудиофайл (.mp3 / .wav)** или запишите **голосовое сообщение**:", reply_markup=kb)
+    safe_nav(c, "🎙️ **Загрузка нового пранка:**\n\nОтправьте аудиофайл или запишите голосовое сообщение:", reply_markup=kb)
 
 @bot.message_handler(content_types=['audio', 'voice', 'document'], func=lambda m: user_state.get(m.chat.id) == "adm_waiting_audio_file")
 def step_receive_audio(m):
@@ -850,7 +851,7 @@ def step_receive_audio(m):
         fname = m.document.file_name
 
     if not file_id:
-        bot.reply_to(m, "❌ Пожалуйста, отправьте аудиофайл или голосовое сообщение.")
+        bot.reply_to(m, "❌ Отправьте аудиофайл или голосовое сообщение.")
         return
 
     try:
@@ -862,9 +863,9 @@ def step_receive_audio(m):
             
         user_data[m.chat.id] = {"new_audio_file": fname}
         user_state[m.chat.id] = "adm_waiting_audio_title"
-        bot.reply_to(m, f"✅ Аудиофайл `{fname}` успешно сохранён на сервере!\n\nТеперь введите **Название пранка** (например: `👮 ДПС проверка документов`):")
+        bot.reply_to(m, f"✅ Файл сохранён!\n\nВведите **Название пранка**:")
     except Exception as e:
-        bot.reply_to(m, f"❌ Ошибка сохранения файла: {e}")
+        bot.reply_to(m, f"❌ Ошибка: {e}")
 
 @bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_audio_title")
 def step_receive_title(m):
@@ -872,7 +873,7 @@ def step_receive_title(m):
     title = m.text.strip()
     user_data[m.chat.id]["new_audio_title"] = title
     user_state[m.chat.id] = "adm_waiting_audio_desc"
-    bot.reply_to(m, f"Название: **{title}**.\n\nТеперь введите **краткое описание сценария**:")
+    bot.reply_to(m, f"Название: **{title}**.\n\nВведите **краткое описание**:")
 
 @bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_audio_desc")
 def step_receive_desc(m):
@@ -891,8 +892,7 @@ def step_receive_desc(m):
     }
     save_json(CUSTOM_PRANKS_FILE, pranks_db)
     user_state[m.chat.id] = None
-    
-    bot.reply_to(m, f"🎉 Пранк **«{d['new_audio_title']}»** успешно добавлен в каталог и доступен для звонков!", reply_markup=kb_main_menu(m.chat.id))
+    bot.reply_to(m, f"🎉 Пранк добавлен!", reply_markup=kb_main_menu(m.chat.id))
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("adm_edit_prank_"))
 def on_adm_edit_prank(c):
@@ -907,4 +907,182 @@ def on_adm_edit_prank(c):
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton(pub_btn, callback_data=f"adm_toggle_prank_{k}"))
     kb.row(types.InlineKeyboardButton("🚀 Протестировать звонок", callback_data=f"setup_call_{k}"))
-    if not p: return
+    if not k.startswith("def_") and k not in DEFAULT_PRANKS:
+        kb.row(types.InlineKeyboardButton("🗑️ Удалить этот пранк", callback_data=f"adm_del_prank_{k}"))
+    kb.row(types.InlineKeyboardButton("🔙 Назад к списку", callback_data="adm_manage_audios"))
+    
+    status_str = "🌐 Опубликован" if is_pub else "🔒 Скрыт"
+    text = (
+        f"🎙️ **Управление пранком:**\n\n"
+        f"🎭 **{p['title']}**\n"
+        f"📁 Файл: `{p.get('file', 'audio.mp3')}`\n"
+        f"📊 Статус: `{status_str}`\n"
+        f"💬 Описание: {p.get('desc', '')}"
+    )
+    safe_nav(c, text, reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("adm_toggle_prank_"))
+def on_adm_toggle_prank(c):
+    if not is_admin(c.message.chat.id): return
+    k = c.data.replace("adm_toggle_prank_", "")
+    p = pranks_db.get(k)
+    if p:
+        p["public"] = not p.get("public", True)
+        save_json(CUSTOM_PRANKS_FILE, pranks_db)
+        bot.answer_callback_query(c.id, "✅ Статус изменён!")
+        on_adm_edit_prank(c)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("adm_del_prank_"))
+def on_adm_del_prank(c):
+    if not is_admin(c.message.chat.id): return
+    k = c.data.replace("adm_del_prank_", "")
+    if k in pranks_db:
+        del pranks_db[k]
+        save_json(CUSTOM_PRANKS_FILE, pranks_db)
+        bot.answer_callback_query(c.id, "🗑️ Пранк удалён!")
+        on_adm_audios(c)
+
+@bot.callback_query_handler(func=lambda c: c.data == "adm_change_price")
+def on_adm_change_price(c):
+    if not is_admin(c.message.chat.id): return
+    user_state[c.message.chat.id] = "adm_waiting_new_price"
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
+    safe_nav(c, f"💰 **Текущая цена:** `{CALL_PRICE_RUB}` ₽.\n\nВведите **новую цену в рублях**:", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_new_price")
+def step_new_price(m):
+    if not is_admin(m.chat.id): return
+    user_state[m.chat.id] = None
+    try:
+        new_p = int(m.text.strip())
+        global CALL_PRICE_RUB
+        CALL_PRICE_RUB = new_p
+        admin_cfg["call_price"] = new_p
+        save_json(CONFIG_FILE, admin_cfg)
+        bot.reply_to(m, f"✅ Цена изменена на **{new_p} ₽**!")
+        show_admin_panel(m.chat.id)
+    except Exception:
+        bot.reply_to(m, "❌ Ошибка. Введите число.")
+
+@bot.callback_query_handler(func=lambda c: c.data == "adm_create_promo")
+def on_adm_create_promo(c):
+    if not is_admin(c.message.chat.id): return
+    user_state[c.message.chat.id] = "adm_waiting_promo_name"
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
+    safe_nav(c, "➕ **Создание промокода:**\n\nВведите текст промокода:", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_promo_name")
+def step_promo_name(m):
+    if not is_admin(m.chat.id): return
+    p_name = m.text.strip().upper()
+    user_data[m.chat.id] = {"new_promo_name": p_name}
+    user_state[m.chat.id] = "adm_waiting_promo_rub"
+    bot.reply_to(m, f"Сумма бонуса для `{p_name}`:")
+
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_promo_rub")
+def step_promo_rub(m):
+    if not is_admin(m.chat.id): return
+    user_state[m.chat.id] = None
+    try:
+        rub = int(m.text.strip())
+        p_name = user_data.get(m.chat.id, {}).get("new_promo_name", "GIFT")
+        promocodes[p_name] = {"rub": rub, "uses": 100, "used_by": []}
+        save_json(PROMO_FILE, promocodes)
+        bot.reply_to(m, f"✅ Промокод `{p_name}` на {rub} ₽ создан!")
+        show_admin_panel(m.chat.id)
+    except Exception:
+        bot.reply_to(m, "❌ Ошибка. Введите число.")
+
+@bot.callback_query_handler(func=lambda c: c.data == "adm_add_balance")
+def on_adm_add_bal(c):
+    if not is_admin(c.message.chat.id): return
+    user_state[c.message.chat.id] = "adm_waiting_target_user"
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
+    safe_nav(c, "💳 **Начисление баланса:**\n\nВведите Telegram ID пользователя:", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_target_user")
+def step_target_user(m):
+    if not is_admin(m.chat.id): return
+    t_uid = m.text.strip()
+    user_data[m.chat.id] = {"target_uid": t_uid}
+    user_state[m.chat.id] = "adm_waiting_add_amount"
+    bot.reply_to(m, f"Пользователь: `{t_uid}`.\n\nВведите сумму в рублях:")
+
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_add_amount")
+def step_add_amount(m):
+    if not is_admin(m.chat.id): return
+    user_state[m.chat.id] = None
+    try:
+        amt = int(m.text.strip())
+        t_uid = user_data.get(m.chat.id, {}).get("target_uid")
+        u = get_user(t_uid)
+        u["balance_rub"] = u.get("balance_rub", 0) + amt
+        save_json(DB_FILE, db)
+        bot.reply_to(m, f"✅ Начислено +{amt} ₽ пользователю `{t_uid}`!")
+        try:
+            bot.send_message(int(t_uid), f"🎁 **Администратор начислил вам +{amt} ₽ на баланс!**\nТекущий баланс: **{u['balance_rub']} ₽**.")
+        except Exception: pass
+        show_admin_panel(m.chat.id)
+    except Exception:
+        bot.reply_to(m, "❌ Введите число.")
+
+@bot.callback_query_handler(func=lambda c: c.data == "adm_broadcast")
+def on_adm_broadcast(c):
+    if not is_admin(c.message.chat.id): return
+    user_state[c.message.chat.id] = "adm_waiting_broadcast_text"
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
+    safe_nav(c, "📢 **Рассылка:**\n\nОтправьте текст сообщения:", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_broadcast_text")
+def step_broadcast(m):
+    if not is_admin(m.chat.id): return
+    user_state[m.chat.id] = None
+    text = m.text
+    count = 0
+    for uid in db.keys():
+        try:
+            bot.send_message(int(uid), f"📢 **Сообщение от администрации:**\n\n{text}", parse_mode="Markdown")
+            count += 1
+        except Exception: pass
+    bot.reply_to(m, f"✅ Отправлено {count} пользователям!")
+    show_admin_panel(m.chat.id)
+
+@bot.callback_query_handler(func=lambda c: c.data == "adm_users_list")
+def on_adm_users(c):
+    if not is_admin(c.message.chat.id): return
+    text = f"👥 **Пользователи ({len(db)}):**\n\n"
+    for uid, data in list(db.items())[-15:]:
+        text += f"• `{uid}` | {data.get('name', 'Друг')} | {data.get('balance_rub', 0)} ₽\n"
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_panel_open"))
+    safe_nav(c, text, reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data == "adm_recent_calls")
+def on_adm_recent_calls(c):
+    if not is_admin(c.message.chat.id): return
+    all_calls = []
+    for uid, data in db.items():
+        for ch in data.get("calls_history", []):
+            all_calls.append((uid, ch))
+    text = "📋 **Последние звонки:**\n\n"
+    if all_calls:
+        for uid, ch in all_calls[-7:]:
+            text += f"• `{ch.get('time')}` | `+{ch.get('phone')}`\n  🎭 {ch.get('prank')} ({ch.get('service', 'Шлюз')})\n"
+    else:
+        text += "_Звонков пока нет._"
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_panel_open"))
+    safe_nav(c, text, reply_markup=kb)
+
+setup_bot_commands()
+print("\n>>> БОТ УСПЕШНО ЗАПУЩЕН! РАБОТАЮТ ОБА НАПРАВЛЕНИЯ (+7 И МЕЖДУНАРОДНЫЙ) <<<")
+
+while True:
+    try:
+        bot.polling(none_stop=True, interval=0, timeout=20)
+    except Exception:
+        time.sleep(2)
