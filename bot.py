@@ -49,6 +49,52 @@ YOOMONEY_SECRET = os.getenv("YOOMONEY_SECRET", "D2LS1zPM2UPAZ9wLeEVdbx7i")
 LAVA_API_KEY = os.getenv("LAVA_API_KEY", "HyjXt7zeMvX1Z6JKtbyMoINHhIsyeMh5NGXI9c3Il4wdS35EFeHVqPtnrc9s3pBP")
 LAVA_DEFAULT_PRODUCT = os.getenv("LAVA_DEFAULT_PRODUCT", "https://app.lava.top/products/a86f2412-debe-42a3-83fc-ab3abdc5a967")
 
+CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN", "633014:AAdLxwOMJi6TOq3NVYRy5yyjJKVlNNTtMVO")
+
+def create_crypto_invoice(user_id, amount_rub, title=""):
+    try:
+        url = "https://pay.crypt.bot/api/createInvoice"
+        headers = {"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN}
+        data = {
+            "currency_type": "fiat",
+            "fiat": "RUB",
+            "amount": str(amount_rub),
+            "description": f"Пополнение GenCalls: {title} ({amount_rub} руб)",
+            "payload": f"{user_id}:{amount_rub}"
+        }
+        res = requests.post(url, headers=headers, json=data, timeout=8).json()
+        if res.get("ok"):
+            inv = res["result"]
+            inv_id = str(inv["invoice_id"])
+            pay_url = inv.get("bot_invoice_url") or inv.get("mini_app_invoice_url") or inv.get("pay_url")
+            
+            pending_payments[inv_id] = {
+                "user_id": str(user_id),
+                "amount": int(amount_rub),
+                "time": time.time(),
+                "paid": False,
+                "service": "cryptobot"
+            }
+            save_json(PENDING_PAYMENTS_FILE, pending_payments)
+            return inv_id, pay_url
+    except Exception as e:
+        print("CryptoPay create error:", e)
+    return None, None
+
+def check_crypto_invoice(invoice_id):
+    try:
+        url = f"https://pay.crypt.bot/api/getInvoices?invoice_ids={invoice_id}"
+        headers = {"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN}
+        res = requests.get(url, headers=headers, timeout=8).json()
+        if res.get("ok"):
+            items = res.get("result", {}).get("items", [])
+            if items:
+                status = items[0].get("status")
+                return status == "paid"
+    except Exception as e:
+        print("CryptoPay check error:", e)
+    return False
+
 pending_payments = load_json(PENDING_PAYMENTS_FILE, {})
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "tadevosankaro12")
 
@@ -187,7 +233,6 @@ def generate_payment(user_id, amount_rub, comment=""):
     }
     save_json(PENDING_PAYMENTS_FILE, pending_payments)
     
-    # Шлюз с поддержкой СБП / SberPay / Банковских карт на ТОЧНУЮ сумму
     base_url = "https://yoomoney.ru/quickpay/confirm.xml"
     params = {
         "receiver": YOOMONEY_WALLET,
@@ -198,8 +243,6 @@ def generate_payment(user_id, amount_rub, comment=""):
         "label": f"{user_id}:{amount_rub}:{pay_id}"
     }
     pay_url = f"{base_url}?{urllib.parse.urlencode(params)}"
-    
-    # Генератор официального QR-кода на точную сумму
     qr_image_url = f"https://api.qrserver.com/v1/create-qr-code/?size=350x350&data={urllib.parse.quote(pay_url)}"
     return pay_id, pay_url, qr_image_url
 
@@ -596,7 +639,7 @@ def show_account_view(chat_id, c=None):
     if c: safe_nav(c, text, reply_markup=kb)
     else: bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
 
-# ---- ТАРИФЫ И ПОПОЛНЕНИЕ (СБП + ЮMONEY НА ЛЮБУЮ СУММУ) ----
+# ---- ТАРИФЫ И ПОПОЛНЕНИЕ (СБП, КАРТЫ, @SEND И ЮMONEY) ----
 @bot.message_handler(commands=["balance"])
 def cmd_balance(m):
     show_packages_view(m.chat.id)
@@ -613,8 +656,9 @@ def show_packages_view(chat_id, c=None):
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
     
     text = (
-        "💰 **Пополнение баланса (СБП / Карты / QR-код)**\n\n"
-        "Выберите готовый пакет со скидкой или укажите любую сумму:"
+        "💰 **Пополнение баланса:**\n\n"
+        "⚡ **Доступны все способы оплаты:** СБП, СберБанк, Т-Банк, ВТБ, Альфа, Карты РФ и Telegram @send.\n\n"
+        "Выберите выгодный пакет со скидкой или укажите свою сумму:"
     )
     if c: safe_nav(c, text, reply_markup=kb)
     else: bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
@@ -626,21 +670,25 @@ def on_buy_package(c):
     user_id = c.message.chat.id
     rub = pkg.get("rub", 49)
     
-    pay_id, pay_url, qr_url = generate_payment(user_id, rub, pkg.get("title"))
+    inv_id, send_url = create_crypto_invoice(user_id, rub, pkg.get("title"))
+    ym_id, ym_url, qr_url = generate_payment(user_id, rub, pkg.get("title"))
     
     text = (
         f"💳 **Счёт на оплату: {pkg.get('title')}**\n"
         f"💰 **Сумма к оплате:** `{rub} ₽`\n\n"
-        f"📱 **Оплата через СБП (Система быстрых платежей):**\n"
-        f"• Сбербанк, Т-Банк, ВТБ, Альфа-Банк\n"
-        f"• Без комиссии, мгновенное зачисление!\n\n"
-        f"👇 _Нажмите кнопку для оплаты в приложении банка или отсканируйте QR-код:_"
+        f"📱 **Доступные способы оплаты:**\n"
+        f"• ⚡ **СБП (Система быстрых платежей)** — Сбер, Т-Банк, ВТБ, Альфа\n"
+        f"• 💳 **Банковские карты РФ** (МИР, Visa, Mastercard)\n"
+        f"• 🤖 **В 1 клик через Telegram @send**\n\n"
+        f"👇 _Нажмите кнопку ниже для перехода к оплате:_\n"
     )
     kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton(f"📲 Оплатить {rub} ₽ через СБП", url=pay_url))
-    if rub == 50 or rub == 49:
-        kb.row(types.InlineKeyboardButton("🛡️ Оплатить через Lava.top", url=LAVA_DEFAULT_PRODUCT))
-    kb.row(types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_ym_{pay_id}"))
+    if send_url:
+        kb.row(types.InlineKeyboardButton(f"📲 Оплатить {rub} ₽ (СБП / Карты / @send)", url=send_url))
+        kb.row(types.InlineKeyboardButton("🔄 Проверить оплату (@send)", callback_data=f"check_cp_{inv_id}_{rub}"))
+    
+    kb.row(types.InlineKeyboardButton(f"🏦 Оплатить через ЮMoney / СБП ({rub} ₽)", url=ym_url))
+    kb.row(types.InlineKeyboardButton("🔄 Проверить оплату (ЮMoney)", callback_data=f"check_ym_{ym_id}"))
     kb.row(types.InlineKeyboardButton("🔙 Назад к тарифам", callback_data="packages_menu"))
     
     try:
@@ -668,15 +716,24 @@ def step_custom_rub(m):
             bot.reply_to(m, "❌ Минимальная сумма пополнения — 10 ₽.")
             return
             
-        pay_id, pay_url, qr_url = generate_payment(m.chat.id, amount, f"Пополнение на {amount} ₽")
+        inv_id, send_url = create_crypto_invoice(m.chat.id, amount, f"Своя сумма {amount} ₽")
+        ym_id, ym_url, qr_url = generate_payment(m.chat.id, amount, f"Пополнение на {amount} ₽")
+        
         text = (
-            f"💳 **Счёт на сумму {amount} ₽ сформирован!**\n\n"
-            f"📱 **Оплата по СБП и картам любого банка РФ.**\n\n"
-            f"👇 _Перейдите к оплате или отсканируйте QR-код в приложении банка:_"
+            f"💳 **Счёт на сумму {amount} ₽ успешно сгенерирован!**\n\n"
+            f"📱 **Все способы оплаты активны:**\n"
+            f"• ⚡ **СБП (qr.nspk.ru) & Банки РФ**\n"
+            f"• 💳 **Карты любого банка (МИР, Visa)**\n"
+            f"• 🤖 **В 1 клик через @send**\n\n"
+            f"👇 _Выберите удобный способ оплаты:_\n"
         )
         kb = types.InlineKeyboardMarkup()
-        kb.row(types.InlineKeyboardButton(f"📲 Оплатить {amount} ₽ (СБП)", url=pay_url))
-        kb.row(types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_ym_{pay_id}"))
+        if send_url:
+            kb.row(types.InlineKeyboardButton(f"📲 Оплатить {amount} ₽ (СБП / Карты / @send)", url=send_url))
+            kb.row(types.InlineKeyboardButton("🔄 Проверить оплату (@send)", callback_data=f"check_cp_{inv_id}_{amount}"))
+        
+        kb.row(types.InlineKeyboardButton(f"🏦 Оплатить через ЮMoney / СБП ({amount} ₽)", url=ym_url))
+        kb.row(types.InlineKeyboardButton("🔄 Проверить оплату (ЮMoney)", callback_data=f"check_ym_{ym_id}"))
         kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
         
         try:
@@ -685,7 +742,44 @@ def step_custom_rub(m):
             bot.send_message(m.chat.id, text, parse_mode="Markdown", reply_markup=kb)
             
     except Exception:
-        bot.reply_to(m, "❌ Пожалуйста, введите корректное число (например: 200).")
+        bot.reply_to(m, "❌ Пожалуйста, введите корректное число (например: 250).")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("check_cp_"))
+def on_check_cp_payment(c):
+    parts = c.data.split("_")
+    if len(parts) >= 4:
+        inv_id = parts[2]
+        amount = int(parts[3])
+    else:
+        bot.answer_callback_query(c.id, "Ошибка данных платежа", show_alert=True)
+        return
+        
+    p = pending_payments.get(inv_id, {})
+    if p.get("paid", False):
+        bot.answer_callback_query(c.id, "✅ Этот счёт уже успешно зачислен!", show_alert=True)
+        return
+        
+    is_paid = check_crypto_invoice(inv_id)
+    if is_paid:
+        uid = str(c.message.chat.id)
+        u = get_user(uid)
+        u["balance_rub"] = u.get("balance_rub", 0) + amount
+        p["paid"] = True
+        save_json(DB_FILE, db)
+        save_json(PENDING_PAYMENTS_FILE, pending_payments)
+        
+        bot.answer_callback_query(c.id, "🎉 Оплата подтверждена!", show_alert=True)
+        try:
+            bot.send_message(
+                int(uid),
+                f"🎉 **Оплата {amount} ₽ через @send успешно получена!**\n\n"
+                f"💰 Ваш баланс: **{u['balance_rub']} ₽** ({u['balance_rub'] // CALL_PRICE_RUB} 📞).\n"
+                f"Приятных розыгрышей!",
+                reply_markup=kb_main_menu(uid)
+            )
+        except Exception: pass
+    else:
+        bot.answer_callback_query(c.id, "⏳ Платёж ещё не поступил. Оплатите счёт и нажмите проверку ещё раз!", show_alert=True)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("check_ym_"))
 def on_check_ym_payment(c):
@@ -697,7 +791,7 @@ def on_check_ym_payment(c):
     if p.get("paid", False):
         bot.answer_callback_query(c.id, "✅ Платёж уже успешно зачислен!", show_alert=True)
         return
-    bot.answer_callback_query(c.id, "⏳ Платёж обрабатывается банком... Деньги зачислятся автоматически сразу после подтверждения!", show_alert=True)
+    bot.answer_callback_query(c.id, "⏳ Платёж обрабатывается... Деньги зачислятся автоматически сразу после подтверждения!", show_alert=True)
 
 # ---- ПОДДЕРЖКА, ПРОМОКОДЫ, ПАРТНЁРКА, АНТИ-ПРАНК ----
 @bot.callback_query_handler(func=lambda c: c.data == "nav_help")
@@ -794,7 +888,7 @@ def on_back_main(c):
 # ================= АДМИН-ПАНЕЛЬ И СТУДИЯ АУДИО =================
 @bot.message_handler(commands=["admin"])
 def cmd_admin(m):
-    user_state[m.chat.id] = None  # Сброс зависшего ввода
+    user_state[m.chat.id] = None
     if not is_admin(m.chat.id):
         bot.reply_to(m, "⛔ У вас нет доступа к панели администратора.")
         return
@@ -890,7 +984,6 @@ def step_receive_audio(m):
         bot.reply_to(m, "❌ Отправьте корректное аудио или голосовое сообщение.")
         return
 
-    # Сохраняем локально и сохраняем telegram file_id
     try:
         f_info = bot.get_file(file_id)
         downloaded = bot.download_file(f_info.file_path)
