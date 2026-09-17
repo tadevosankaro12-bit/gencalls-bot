@@ -761,4 +761,4 @@ def cb_faq(c):
         "❓ <b>Куда обратиться с проблемой?</b>\n"
         "— Нажмите кнопку связи с администратором ниже."
     )
-    safe_nav(c, text, reply_markup=kb)
+    safe_nav(c, text, reply_markup=kb)MAX_REFERRALS = admin_cfg.get("max_referrals", 3)
