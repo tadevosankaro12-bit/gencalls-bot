@@ -185,23 +185,38 @@ def is_admin(chat_id):
     admins_list = [str(x).strip() for x in admin_cfg.get("admins", ["8682521929", "1438908852", "8915393389"])]
     return cid == admin_id or cid in admins_list
 
+# БЫСТРАЯ НАВИГАЦИЯ БЕЗ ЗАВИСАНИЙ КНОПОК
 def safe_nav(call, text, reply_markup=None, parse_mode="HTML"):
     try:
-        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=True)
+        bot.answer_callback_query(call.id)
     except Exception:
-        try:
-            bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
-        except Exception:
-            pass
-        bot.send_message(call.message.chat.id, text, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=True)
+        pass
+    try:
+        bot.edit_message_text(
+            text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            try:
+                bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
+            except Exception:
+                pass
+            bot.send_message(call.message.chat.id, text, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=True)
 
 MAIN_TEXT_BANNER = (
     "🎭 <b>Добро пожаловать в GenCalls — Платформу телефонных розыгрышей!</b>\n\n"
     "🎁 <b>Вам начислено 2 БЕСПЛАТНЫХ ЗВОНКА в подарок при регистрации!</b>\n\n"
-    "Выберите категорию розыгрыша ниже для запуска звонка:"
+    "• Розыгрыши по готовым сценариям с реалистичным голосом\n"
+    "• Анонимные звонки в Россию, Казахстан и по всему миру\n"
+    "• Запись реакции абонента отправляется прямо в чат!\n\n"
+    "<i>Выберите нужное действие в меню ниже:</i>"
 )
 
-# ГЛАВНОЕ МЕНЮ
 def kb_main_menu():
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🎭 Каталог розыгрышей", callback_data="nav_categories"))
@@ -211,7 +226,6 @@ def kb_main_menu():
     kb.row(types.InlineKeyboardButton("⚖️ Пользовательское соглашение и FAQ", callback_data="nav_legal"))
     return kb
 
-# ЗВУКОВОЙ ГЕНЕРАТОР ЗАПИСИ
 def generate_playable_audio_file(filepath, prank_title):
     sample_rate = 8000
     duration_sec = 4
@@ -243,7 +257,6 @@ def generate_playable_audio_file(filepath, prank_title):
         f.write(header)
         f.write(audio_data)
 
-# РОУТИНГ ПО СТРАНАМ
 def dispatch_call_by_country(phone, speech_text, region):
     clean_phone = phone.replace("+", "").replace(" ", "").replace("-", "")
     
@@ -274,7 +287,7 @@ def dispatch_call_by_country(phone, speech_text, region):
                 logging.error(f"Gateway 2 SMS.RU Error: {e}")
         return {"success": True, "service": "Сервис 2 (SMS.RU World)", "call_id": f"LINE_WORLD_{int(time.time())}"}
 
-# ==================== ОБРАБОТКА КОМАНД ====================
+# ==================== ОБРАБОТКА ВСЕХ КОМАНД (ВЫСШИЙ ПРИОРИТЕТ) ====================
 @bot.message_handler(commands=["start", "menu"])
 def cmd_start(m):
     user_state[m.chat.id] = None
@@ -303,15 +316,18 @@ def cmd_start(m):
 
 @bot.message_handler(commands=["balance"])
 def cmd_balance(m):
+    user_state[m.chat.id] = None
     u = get_user(m.chat.id)
     price = admin_cfg.get("call_price", CALL_PRICE_RUB)
     calls = int(u["balance_rub"] // price)
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("💰 Пополнить баланс", callback_data="nav_topup"))
+    kb.row(types.InlineKeyboardButton("🔙 В главное меню", callback_data="back_main"))
     bot.send_message(m.chat.id, f"💳 <b>Ваш текущий баланс:</b> {u['balance_rub']:.2f} ₽\n📞 <b>Доступно вызовов:</b> {calls} шт.", parse_mode="HTML", reply_markup=kb)
 
 @bot.message_handler(commands=["profile", "account"])
 def cmd_profile(m):
+    user_state[m.chat.id] = None
     u = get_user(m.chat.id)
     price = admin_cfg.get("call_price", CALL_PRICE_RUB)
     calls_available = int(u["balance_rub"] // price)
@@ -321,18 +337,19 @@ def cmd_profile(m):
         "👤 <b>Личный кабинет клиента</b>\n\n"
         f"💬 Ваш ID: <code>{m.chat.id}</code>\n"
         f"💬 Регистрация: {reg_str}\n\n"
-        f"💰 Баланс: {u['balance_rub']:.2f} ₽\n"
-        f"📞 Доступно звонков: {calls_available} вызовов\n"
-        f"📊 Совершено пранков: {u.get('calls_made', 0)} шт."
+        f"💰 Баланс: <b>{u['balance_rub']:.2f} ₽</b>\n"
+        f"📞 Доступно звонков: <b>{calls_available} вызовов</b>\n"
+        f"📊 Совершено пранков: <b>{u.get('calls_made', 0)} шт.</b>"
     )
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("💰 Пополнить баланс", callback_data="nav_topup"))
-    kb.row(types.InlineKeyboardButton("📜 История вызовов", callback_data="nav_history"), types.InlineKeyboardButton("⚖️ Соглашение", callback_data="nav_legal"))
+    kb.row(types.InlineKeyboardButton("📜 История вызовов", callback_data="nav_history"), types.InlineKeyboardButton("💬 Поддержка", callback_data="nav_support"))
     kb.row(types.InlineKeyboardButton("🔙 В главное меню", callback_data="back_main"))
     bot.send_message(m.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 @bot.message_handler(commands=["history"])
 def cmd_history(m):
+    user_state[m.chat.id] = None
     u = get_user(m.chat.id)
     hist = u.get("history", [])
     if not hist:
@@ -354,13 +371,14 @@ def cmd_promo(m):
 
 @bot.message_handler(commands=["help", "faq"])
 def cmd_help(m):
+    user_state[m.chat.id] = None
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("💬 Поддержка в Telegram", callback_data="nav_support"))
     kb.row(types.InlineKeyboardButton("🔙 В главное меню", callback_data="back_main"))
     text = (
         "❓ <b>Часто задаваемые вопросы (FAQ):</b>\n\n"
         "1. <b>Как распределяются звонки?</b>\n"
-        "• Россия и Казахстан (+7) обслуживаются прямым федеральным шлюзом Сервиса 1.\n"
+        "• Россия и Казахстан (+7) обслуживаются федеральным шлюзом Сервиса 1.\n"
         "• Все остальные страны мира идут через Международный шлюз SMS.RU.\n\n"
         "2. <b>Узнает ли жертва, кто звонит?</b>\n"
         "Звонок полностью анонимен. Ваш номер не передается оператору.\n\n"
@@ -371,11 +389,12 @@ def cmd_help(m):
 
 @bot.message_handler(commands=["support"])
 def cmd_support(m):
+    user_state[m.chat.id] = None
     open_support_window(m.chat.id)
 
-# ВХОД В АДМИНКУ ТОЛЬКО ЧЕРЕЗ /ADMIN
 @bot.message_handler(commands=["admin"])
 def cmd_admin(m):
+    user_state[m.chat.id] = None
     if not is_admin(m.chat.id):
         bot.reply_to(m, "❌ <b>Команда не найдена.</b>", parse_mode="HTML")
         return
@@ -386,20 +405,20 @@ def cb_back_main(c):
     user_state[c.message.chat.id] = None
     safe_nav(c, MAIN_TEXT_BANNER, reply_markup=kb_main_menu())
 
-# ==================== МОДУЛЬ ПОДДЕРЖКИ (ИНТЕРФЕЙС И ТИКЕТЫ) ====================
+# ==================== МОДУЛЬ ПОДДЕРЖКИ 24/7 ====================
 def open_support_window(chat_id, call=None):
     sup_contact = admin_cfg.get("support_contact", "gencalls_support").lstrip("@")
     sup_url = f"https://t.me/{sup_contact}"
     
     text = (
         "💬 <b>Служба клиентской поддержки GenCalls 24/7</b>\n\n"
-        "Возник вопрос по звонку, пополнению баланса или работе сервиса?\n"
-        "Мы всегда на связи и готовы помочь!\n\n"
-        "Выберите удобный способ связи ниже:"
+        "Возникли вопросы по розыгрышу, пополнению баланса или сотрудничеству?\n"
+        "Мы всегда на связи и готовы помочь в любую минуту!\n\n"
+        "Выберите удобный вариант связи:"
     )
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("✍️ Задать вопрос прямо в боте", callback_data="sup_write_ticket"))
-    kb.row(types.InlineKeyboardButton("🤖 Открыть чат поддержки / бот", url=sup_url))
+    kb.row(types.InlineKeyboardButton("🤖 Открыть диалог поддержки", url=sup_url))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
     
     if call: safe_nav(call, text, reply_markup=kb)
@@ -414,9 +433,9 @@ def cb_sup_write_ticket(c):
     user_state[c.message.chat.id] = "waiting_support_message"
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="nav_support"))
-    safe_nav(c, "📝 <b>Напишите ваш вопрос или проблему в ответном сообщении:</b>\n<i>Мы ответим вам в кратчайшие сроки!</i>", reply_markup=kb)
+    safe_nav(c, "📝 <b>Напишите ваш вопрос в ответном сообщении:</b>\n<i>Мы ответим вам прямо в этот чат в кратчайшие сроки!</i>", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_support_message")
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_support_message" and not m.text.startswith("/"))
 def step_process_support(m):
     user_state[m.chat.id] = None
     user_text = m.text.strip()
@@ -438,9 +457,8 @@ def step_process_support(m):
         
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 В главное меню", callback_data="back_main"))
-    bot.reply_to(m, "✅ <b>Ваше обращение успешно отправлено оператору!</b>\nСпециалист поддержки рассмотрит его и пришлет ответ прямо в этот диалог.", parse_mode="HTML", reply_markup=kb)
+    bot.reply_to(m, "✅ <b>Ваше обращение передано в службу поддержки!</b>\nОператор ответит вам прямо в этот диалог.", parse_mode="HTML", reply_markup=kb)
 
-# ОТВЕТ АДМИНИСТРАТОРА НА ТИКЕТ
 @bot.message_handler(commands=["reply"])
 def cmd_reply(m):
     if not is_admin(m.chat.id): return
@@ -462,7 +480,7 @@ def cb_nav_categories(c):
     if custom_audios:
         kb.row(types.InlineKeyboardButton("🔥 Авторские пранки (Загруженные)", callback_data="open_cat_custom"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
-    safe_nav(c, "🎭 <b>Выберите категорию звонка-розыгрыша:</b>", reply_markup=kb)
+    safe_nav(c, "🎭 <b>Выберите категорию звонка-розыгрыша:</b>\n<i>Все сценарии записаны профессиональными дикторами:</i>", reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("open_cat_"))
 def cb_open_cat(c):
@@ -472,25 +490,21 @@ def cb_open_cat(c):
         kb = types.InlineKeyboardMarkup()
         for idx, it in enumerate(custom_audios):
             kb.row(types.InlineKeyboardButton(f"▶️ {it['title']} ({it.get('duration','0:40')})", callback_data=f"view_cust_{idx}"))
-        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data="nav_categories"))
+        kb.row(types.InlineKeyboardButton("🔙 Назад к категориям", callback_data="nav_categories"))
         safe_nav(c, text, reply_markup=kb)
         return
         
     cat = DEFAULT_CATEGORIES.get(cat_id)
     if not cat: return
     
-    cdata = user_data.get(c.message.chat.id, {})
-    phone_display = cdata.get("phone", "не указан")
     text = (
-        "🎉 <b>Звонок-розыгрыш</b>\n"
-        f"├ Категория: {cat['title']}\n"
-        f"└ Номер телефона: {phone_display}\n\n"
-        "🎬 <i>Выберите сценарий пранка:</i>"
+        f"🎭 <b>Категория: {cat['title']}</b>\n\n"
+        "Выберите желаемый сценарий розыгрыша из списка ниже:"
     )
     kb = types.InlineKeyboardMarkup()
     for item in cat["items"]:
         kb.row(types.InlineKeyboardButton(item["btn_title"], callback_data=f"view_track_{cat_id}_{item['id']}"))
-    kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data="nav_categories"))
+    kb.row(types.InlineKeyboardButton("🔙 Назад к категориям", callback_data="nav_categories"))
     safe_nav(c, text, reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("view_cust_"))
@@ -505,7 +519,7 @@ def cb_view_cust(c):
     text = (
         f"🎭 <b>{target_item['title']}</b> ({target_item.get('duration', '0:45')})\n\n"
         f"📝 <b>Описание:</b>\n{target_item.get('desc', 'Эксклюзивный розыгрыш')}\n\n"
-        f"💰 Стоимость вызова: <b>{price} ₽</b> | Баланс: <b>{u['balance_rub']} ₽</b>"
+        f"💰 Стоимость вызова: <b>{price} ₽</b> | Ваш баланс: <b>{u['balance_rub']} ₽</b>"
     )
     user_data.setdefault(c.message.chat.id, {})["selected_track"] = target_item
     user_data[c.message.chat.id]["cat_id"] = "custom"
@@ -536,8 +550,8 @@ def cb_view_track(c):
     text = (
         f"🎭 <b>{target_item['title']}</b> ({target_item['duration']})\n\n"
         f"📝 <b>Описание:</b>\n{target_item['desc']}\n\n"
-        f"🗣️ <b>Что скажет робот:</b>\n<i>«{speech_preview}»</i>\n\n"
-        f"💰 Стоимость вызова: <b>{price} ₽</b> | Баланс: <b>{u['balance_rub']} ₽</b>"
+        f"🗣️ <b>Что услышит абонент:</b>\n<i>«{speech_preview}»</i>\n\n"
+        f"💰 Стоимость вызова: <b>{price} ₽</b> | Ваш баланс: <b>{u['balance_rub']} ₽</b>"
     )
     user_data.setdefault(c.message.chat.id, {})["selected_track"] = target_item
     user_data[c.message.chat.id]["cat_id"] = cat_id
@@ -547,7 +561,7 @@ def cb_view_track(c):
     kb.row(types.InlineKeyboardButton("🔙 Назад к списку", callback_data=f"open_cat_{cat_id}"))
     safe_nav(c, text, reply_markup=kb)
 
-# ==================== ОФОРМЛЕНИЕ ЗВОНКА И ПЛАШКА «ИМЯ / СВОЙ ТЕКСТ» ====================
+# ==================== ОФОРМЛЕНИЕ ВЫЗОВА ====================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("call_confirm_"))
 def cb_call_confirm(c):
     u = get_user(c.message.chat.id)
@@ -565,9 +579,9 @@ def cb_call_confirm(c):
     
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="back_main"))
-    safe_nav(c, f"📞 <b>Введите номер телефона абонента:</b>\nНаправление: <b>{reg_info['title']}</b>\nШлюз: <i>{reg_info['gateway']}</i>\nПример: <code>+79991234567</code>", reply_markup=kb)
+    safe_nav(c, f"📞 <b>Введите номер телефона абонента:</b>\nНаправление: <b>{reg_info['title']}</b>\nШлюз: <i>{reg_info['gateway']}</i>\n\nПример: <code>+79991234567</code>", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_phone_number")
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_phone_number" and not m.text.startswith("/"))
 def step_process_phone(m):
     raw = m.text.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
     if len(raw) < 7:
@@ -585,9 +599,9 @@ def step_process_phone(m):
         kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="back_main"))
         caption_box = (
             "👤 <b>Настройка обращения к абоненту (или свой текст):</b>\n\n"
-            "Напишите <b>ИМЯ жертвы</b> (робот обратится к нему по имени) "
-            "или напишите <b>СВОЙ ТЕКСТ</b> вступительной фразы перед сценарием.\n\n"
-            "<i>(Или нажмите «Пропустить» для стандартного звонка)</i>"
+            "Напишите <b>ИМЯ абонента</b> (робот обратится к нему персонально) "
+            "или напишите <b>СВОЙ ТЕКСТ</b> вступительной фразы перед розыгрышем.\n\n"
+            "<i>(Или нажмите кнопку «Пропустить» ниже для стандартного вызова)</i>"
         )
         bot.send_message(m.chat.id, caption_box, parse_mode="HTML", reply_markup=kb)
     else:
@@ -601,7 +615,7 @@ def cb_skip_victim_name(c):
     user_state[c.message.chat.id] = None
     show_final_call_window(c.message.chat.id, call=c)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_victim_name")
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_victim_name" and not m.text.startswith("/"))
 def step_victim_name(m):
     user_data.setdefault(m.chat.id, {})["victim_name"] = m.text.strip()
     user_state[m.chat.id] = None
@@ -780,7 +794,7 @@ def cb_topup_menu(c):
     kb.row(types.InlineKeyboardButton("🔥 3 звонка — 129 ₽", callback_data="pay_ym_129"))
     kb.row(types.InlineKeyboardButton("⚡ 5 звонков — 199 ₽", callback_data="pay_ym_199"))
     kb.row(types.InlineKeyboardButton("👑 10 звонков — 349 ₽", callback_data="pay_ym_349"))
-    kb.row(types.InlineKeyboardButton("🔙 Назад в аккаунт", callback_data="nav_profile"))
+    kb.row(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_main"))
     safe_nav(c, "💰 <b>Выберите пакет пополнения баланса:</b>\n<i>Оплата картой любого банка РФ или через СБП:</i>", reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("pay_ym_"))
@@ -801,8 +815,8 @@ def cb_pay_yoomoney(c):
         f"Номер заказа: <code>{order_id}</code>\n\n"
         "📲 <b>Инструкция по оплате:</b>\n"
         "1. Нажмите кнопку <b>«Оплатить через ЮMoney»</b> ниже.\n"
-        "2. Выберите оплату через СБП или банковскую карту любого банка РФ.\n"
-        "3. После совершения платежа нажмите <b>«Проверить оплату»</b>."
+        "2. Выберите оплату через СБП или карту любого банка РФ.\n"
+        "3. После платежа вернитесь и нажмите <b>«Проверить оплату»</b>."
     )
     safe_nav(c, clean_text, reply_markup=kb)
 
@@ -898,9 +912,9 @@ def cb_profile(c):
         "<i>Основная информация аккаунта:</i>\n\n"
         f"💬 ID: <code>{c.message.chat.id}</code>\n"
         f"💬 Регистрация: {reg_str}\n\n"
-        f"💰 Баланс: {u['balance_rub']:.2f} ₽\n"
-        f"📞 Доступно звонков: {calls_available} вызовов\n"
-        f"📊 Совершено пранков: {u.get('calls_made', 0)} шт."
+        f"💰 Баланс: <b>{u['balance_rub']:.2f} ₽</b>\n"
+        f"📞 Доступно звонков: <b>{calls_available} вызовов</b>\n"
+        f"📊 Совершено пранков: <b>{u.get('calls_made', 0)} шт.</b>"
     )
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("💰 Пополнить баланс", callback_data="nav_topup"))
@@ -963,7 +977,7 @@ def cb_promo(c):
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="back_main"))
     safe_nav(c, "🎟️ <b>Введите промокод для активации:</b>\n<i>Поддерживаются промокоды на русском и английском языках!</i>", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_promo")
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_promo" and not m.text.startswith("/"))
 def step_promo(m):
     user_state[m.chat.id] = None
     input_code = m.text.strip().upper()
@@ -1040,7 +1054,7 @@ def cb_set_support_btn(c):
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
     safe_nav(c, f"💬 <b>Введите Telegram-логин поддержки (или ссылку на бота поддержки):</b>\nСейчас установлено: <code>@{cur}</code>\n\nПример: <code>my_support_bot</code>", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_support_contact")
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_support_contact" and not m.text.startswith("/"))
 def step_support_contact(m):
     if not is_admin(m.chat.id): return
     user_state[m.chat.id] = None
@@ -1059,7 +1073,7 @@ def cb_broadcast_btn(c):
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
     safe_nav(c, "📢 <b>Введите текст сообщения для рассылки всем пользователям:</b>", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_broadcast")
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_broadcast" and not m.text.startswith("/"))
 def step_broadcast(m):
     if not is_admin(m.chat.id): return
     user_state[m.chat.id] = None
@@ -1147,7 +1161,7 @@ def cb_set_sms_key(c):
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
     safe_nav(c, "🔑 <b>Введите ваш API-ключ (api_id) от SMS.RU для международных вызовов:</b>", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_sms_key")
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_sms_key" and not m.text.startswith("/"))
 def step_sms_key(m):
     if not is_admin(m.chat.id): return
     user_state[m.chat.id] = None
@@ -1290,7 +1304,7 @@ def cb_add_promo_btn(c):
     )
     safe_nav(c, msg_box, reply_markup=kb)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_new_promo")
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_new_promo" and not m.text.startswith("/"))
 def step_add_promo(m):
     if not is_admin(m.chat.id): return
     user_state[m.chat.id] = None
@@ -1346,7 +1360,7 @@ def on_adm_change_price(c):
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
     safe_nav(c, f"Введите новую цену звонка (сейчас {CALL_PRICE_RUB} ₽):", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_price")
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_price" and not m.text.startswith("/"))
 def step_adm_price(m):
     if not is_admin(m.chat.id): return
     user_state[m.chat.id] = None
@@ -1369,7 +1383,7 @@ def on_adm_change_wallet(c):
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="admin_panel_open"))
     safe_nav(c, "Введите номер кошелька ЮMoney (4100...):", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_wallet")
+@bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "adm_waiting_wallet" and not m.text.startswith("/"))
 def step_adm_wallet(m):
     if not is_admin(m.chat.id): return
     user_state[m.chat.id] = None
@@ -1379,19 +1393,18 @@ def step_adm_wallet(m):
     bot.reply_to(m, f"✅ Кошелек ЮMoney обновлен: <code>{w}</code>", parse_mode="HTML")
     show_admin_panel(m.chat.id)
 
-# ==================== БЕЗОПАСНЫЙ СТАРТ СИСТЕМЫ ====================
+# ==================== СТАРТ СИСТЕМЫ ====================
 if __name__ == "__main__":
     threading.Thread(target=run_webhook_server, daemon=True).start()
     
-    # ПРИНУДИТЕЛЬНЫЙ СБРОС СТАРОГО ВЕБХУКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ОШИБКИ 409 CONFLICT
     try:
         bot.remove_webhook()
         time.sleep(1)
-        logging.info(">>> Webhook successfully removed, starting polling... <<<")
+        logging.info("Webhook successfully removed")
     except Exception as e:
         logging.warning(f"Could not remove webhook: {e}")
 
-    print(">>> GENCALLS: БОТ УСПЕШНО ЗАПУЩЕН И ОНЛАЙН! <<<")
+    print(">>> GENCALLS: БОТ ОНЛАЙН С МГНОВЕННЫМ ОТКЛИКОМ КНОПОК <<<")
     while True:
         try:
             bot.infinity_polling(timeout=25, long_polling_timeout=20)
