@@ -185,7 +185,6 @@ def is_admin(chat_id):
     admins_list = [str(x).strip() for x in admin_cfg.get("admins", ["8682521929", "1438908852", "8915393389"])]
     return cid == admin_id or cid in admins_list
 
-# БЫСТРАЯ НАВИГАЦИЯ БЕЗ ЗАВИСАНИЙ КНОПОК
 def safe_nav(call, text, reply_markup=None, parse_mode="HTML"):
     try:
         bot.answer_callback_query(call.id)
@@ -287,7 +286,7 @@ def dispatch_call_by_country(phone, speech_text, region):
                 logging.error(f"Gateway 2 SMS.RU Error: {e}")
         return {"success": True, "service": "Сервис 2 (SMS.RU World)", "call_id": f"LINE_WORLD_{int(time.time())}"}
 
-# ==================== ОБРАБОТКА ВСЕХ КОМАНД (ВЫСШИЙ ПРИОРИТЕТ) ====================
+# ==================== ОБРАБОТКА ВСЕХ КОМАНД (ВКЛЮЧАЯ СИНЕЕ МЕНЮ) ====================
 @bot.message_handler(commands=["start", "menu"])
 def cmd_start(m):
     user_state[m.chat.id] = None
@@ -314,7 +313,18 @@ def cmd_start(m):
 
     bot.send_message(m.chat.id, MAIN_TEXT_BANNER, parse_mode="HTML", reply_markup=kb_main_menu())
 
-@bot.message_handler(commands=["balance"])
+@bot.message_handler(commands=["catalog", "pranks"])
+def cmd_catalog(m):
+    user_state[m.chat.id] = None
+    kb = types.InlineKeyboardMarkup()
+    for cat_id, cat_info in DEFAULT_CATEGORIES.items():
+        kb.row(types.InlineKeyboardButton(cat_info["title"], callback_data=f"open_cat_{cat_id}"))
+    if custom_audios:
+        kb.row(types.InlineKeyboardButton("🔥 Авторские пранки (Загруженные)", callback_data="open_cat_custom"))
+    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+    bot.send_message(m.chat.id, "🎭 <b>Выберите категорию звонка-розыгрыша:</b>\n<i>Все сценарии озвучены профессиональными дикторами:</i>", parse_mode="HTML", reply_markup=kb)
+
+@bot.message_handler(commands=["balance", "topup"])
 def cmd_balance(m):
     user_state[m.chat.id] = None
     u = get_user(m.chat.id)
@@ -369,7 +379,7 @@ def cmd_promo(m):
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="back_main"))
     bot.send_message(m.chat.id, "🎟️ <b>Введите промокод для активации (на русском или английском):</b>", parse_mode="HTML", reply_markup=kb)
 
-@bot.message_handler(commands=["help", "faq"])
+@bot.message_handler(commands=["help", "faq", "legal"])
 def cmd_help(m):
     user_state[m.chat.id] = None
     kb = types.InlineKeyboardMarkup()
@@ -940,32 +950,39 @@ def cb_history(c):
 @bot.callback_query_handler(func=lambda c: c.data == "nav_legal")
 def cb_legal(c):
     text = (
-        "лица допустимо исполнять только при наличии у Вас письменного согласия "
-        "на обработку его персональных данных и получение SMS сообщений и звонков. "
-        "Работа сервиса ведется в рамках Федеральных законов от 27 июля 2006 года, "
-        "№ 152-ФЗ «О персональных данных», ФЗ «О связи» от 07.07.2003 года (ред. от 21.07.2014 года), "
-        "ФЗ №38 «О рекламе» от 13.03.2006 года.\n\n"
-        "Выполняя рассылку SMS и звонков, Вы автоматически подтверждаете согласие и принимаете Условия сервиса."
+        "⚖️ <b>Пользовательское соглашение и правила сервиса:</b>\n\n"
+        "Исполнение розыгрыша допустимо только при наличии согласия абонента "
+        "на получение звонков в развлекательных целях. "
+        "Работа сервиса ведется строго в рамках действующего законодательства РФ "
+        "(№ 152-ФЗ «О персональных данных», ФЗ «О связи»).\n\n"
+        "Сервис предназначен исключительно для доброжелательного юмора. "
+        "Запрещено использование сервиса в целях хулиганства, угроз или вымогательства."
     )
     kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton("👤 Обработка данных ↗", url="https://telegra.ph/Politika-konfidencialnosti-09-19-48"))
-    kb.row(types.InlineKeyboardButton("📝 Соглашение ↗", url="https://telegra.ph/Polzovatelskoe-soglashenie-09-19-12"))
-    kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data="nav_profile"))
+    kb.row(types.InlineKeyboardButton("👤 Политика конфиденциальности ↗", url="https://telegra.ph/Politika-konfidencialnosti-09-19-48"))
+    kb.row(types.InlineKeyboardButton("📝 Пользовательское соглашение ↗", url="https://telegra.ph/Polzovatelskoe-soglashenie-09-19-12"))
+    kb.row(types.InlineKeyboardButton("🔙 В главное меню", callback_data="back_main"))
     safe_nav(c, text, reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data == "nav_affiliate")
 def cb_affiliate(c):
     bot_info = bot.get_me()
-    ref_link = f"https://t.me/{bot_info.username}?start=ref_{c.message.chat.id}"
+    uname = bot_info.username or "gencalls_bot"
+    ref_link = f"https://t.me/{uname}?start=ref_{c.message.chat.id}"
     u = get_user(c.message.chat.id)
     max_refs = admin_cfg.get("max_referrals", 1)
     cur_refs = u.get("referrals", 0)
     
     status_note = "\n\n✅ <b>Вы достигли лимита (1/1)!</b>" if cur_refs >= max_refs else "\n\n💡 <i>Вы можете пригласить ещё: 1 друга!</i>"
-    text = f"🤝 <b>Партнёрская программа GenCalls</b>\n\nПолучайте <b>+49 ₽ (1 бесплатный звонок)</b> за каждого друга!\n\n👥 Приглашено: <b>{cur_refs}/{max_refs}</b>\n🔗 Ваша реферальная ссылка:\n<code>{ref_link}</code>{status_note}"
+    text = (
+        f"🤝 <b>Партнёрская программа GenCalls</b>\n\n"
+        f"Получайте <b>+49 ₽ (1 бесплатный звонок)</b> за каждого друга!\n\n"
+        f"👥 Приглашено: <b>{cur_refs}/{max_refs}</b>\n"
+        f"🔗 Ваша реферальная ссылка:\n<code>{ref_link}</code>{status_note}"
+    )
     kb = types.InlineKeyboardMarkup()
     if cur_refs < max_refs:
-        kb.row(types.InlineKeyboardButton("📤 Отправить ссылку другу", url=f"https://t.me/share/url?url={ref_link}&text=Анонимные+пранки+🔥"))
+        kb.row(types.InlineKeyboardButton("📤 Отправить ссылку другу", url=f"https://t.me/share/url?url={ref_link}&text=Анонимные+розыгрыши+по+телефону+🔥"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
     safe_nav(c, text, reply_markup=kb)
 
@@ -975,7 +992,7 @@ def cb_promo(c):
     user_state[c.message.chat.id] = "waiting_promo"
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🔙 Отмена", callback_data="back_main"))
-    safe_nav(c, "🎟️ <b>Введите промокод для активации:</b>\n<i>Поддерживаются промокоды на русском и английском языках!</i>", reply_markup=kb)
+    safe_nav(c, "🎟️ <b>Введите промокод для активации:</b>\n<i>Поддерживаются любые промокоды на русском и английском языках!</i>", reply_markup=kb)
 
 @bot.message_handler(func=lambda m: user_state.get(m.chat.id) == "waiting_promo" and not m.text.startswith("/"))
 def step_promo(m):
@@ -1044,7 +1061,6 @@ def show_admin_panel(chat_id, call=None):
     if call: safe_nav(call, text, reply_markup=kb)
     else: bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
 
-# НАСТРОЙКА КОНТАКТА ПОДДЕРЖКИ
 @bot.callback_query_handler(func=lambda c: c.data == "adm_set_support_btn")
 def cb_set_support_btn(c):
     if not is_admin(c.message.chat.id): return
@@ -1064,7 +1080,6 @@ def step_support_contact(m):
     bot.reply_to(m, f"✅ <b>Контакт поддержки успешно обновлен:</b> <code>@{new_contact}</code>", parse_mode="HTML")
     show_admin_panel(m.chat.id)
 
-# РАССЫЛКА СООБЩЕНИЙ
 @bot.callback_query_handler(func=lambda c: c.data == "adm_broadcast_btn")
 def cb_broadcast_btn(c):
     if not is_admin(c.message.chat.id): return
@@ -1404,7 +1419,22 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"Could not remove webhook: {e}")
 
-    print(">>> GENCALLS: БОТ ОНЛАЙН С МГНОВЕННЫМ ОТКЛИКОМ КНОПОК <<<")
+    # РЕГИСТРАЦИЯ КОМАНД ДЛЯ КНОПКИ [ МЕНЮ ] В TELEGRAM
+    try:
+        bot.set_my_commands([
+            types.BotCommand("start", "Главное меню"),
+            types.BotCommand("catalog", "Каталог розыгрышей"),
+            types.BotCommand("balance", "Баланс и пополнение"),
+            types.BotCommand("profile", "Мой профиль"),
+            types.BotCommand("promo", "Активировать промокод"),
+            types.BotCommand("history", "История звонков"),
+            types.BotCommand("support", "Поддержка 24/7"),
+            types.BotCommand("help", "FAQ и помощь")
+        ])
+    except Exception as e:
+        logging.warning(f"Could not set bot commands: {e}")
+
+    print(">>> GENCALLS: БОТ ОНЛАЙН, ВСЕ КОМАНДЫ И КНОПКИ АКТИВНЫ! <<<")
     while True:
         try:
             bot.infinity_polling(timeout=25, long_polling_timeout=20)
