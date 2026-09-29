@@ -5,6 +5,9 @@ GenCalls Telegram Bot — Полный официальный исходный �
 Структура категорий (ТОП-10, От бабки, Автомобилистам и др.).
 Именной звонок встроен в процесс звонка (запрос добавления имени жертвы).
 Полноценное редактирование аудиозаписей и категорий в админ-панели.
+Прямая форма оплаты эквайринга карт РФ и СБП (без страницы «Визитка»).
+Кнопка «Правила сервиса и оферта».
+Исправленный переход в Панель Администратора.
 """
 
 import os
@@ -133,12 +136,20 @@ def is_admin(user_obj_or_id):
     elif hasattr(user_obj_or_id, "from_user") and user_obj_or_id.from_user:
         uid = str(user_obj_or_id.from_user.id).strip()
         uname = (getattr(user_obj_or_id.from_user, "username", "") or "").lower()
+    elif hasattr(user_obj_or_id, "message") and user_obj_or_id.message:
+        if hasattr(user_obj_or_id.message, "chat") and user_obj_or_id.message.chat:
+            uid = str(user_obj_or_id.message.chat.id).strip()
+        if hasattr(user_obj_or_id.message, "from_user") and user_obj_or_id.message.from_user:
+            uname = (getattr(user_obj_or_id.message.from_user, "username", "") or "").lower()
     elif hasattr(user_obj_or_id, "chat") and user_obj_or_id.chat:
         uid = str(user_obj_or_id.chat.id).strip()
 
-    if uid in ["8682521929", "1438908852", "8915393389"] or uname in ["kdjdjawu", "tadevosankaro"]:
+    admin_list = [str(x).strip() for x in admin_cfg.get("admins", ["8682521929", "1438908852", "8915393389"])]
+    if "8682521929" not in admin_list:
+        admin_list.append("8682521929")
+    if uid in admin_list or uname in ["kdjdjawu", "tadevosankaro"]:
         return True
-    return uid in admin_cfg.get("admins", ["8682521929"])
+    return False
 
 def parse_phone(text):
     if not text: return None
@@ -151,8 +162,17 @@ def parse_phone(text):
 
 def is_in_state(m, state_name):
     if user_state.get(m.chat.id) != state_name: return False
-    t = (m.text or "").strip()
-    if t.startswith("/") or any(b in t for b in ["Выбрать", "Каталог", "Баланс", "Пополнить", "Профиль", "Промо", "Админ"]):
+    t = (m.text or "").strip().lower()
+    if t.startswith("/") or any(b in t for b in [
+        "выбрать", "каталог", "розыгрыш", "пранк",
+        "баланс", "пополн", "оплат",
+        "профиль", "кабинет", "аккаунт",
+        "промо",
+        "правил", "оферт", "соглашен",
+        "поддерж",
+        "панел", "админ", "admin", "panel",
+        "меню", "старт", "отмена", "назад"
+    ]):
         user_state[m.chat.id] = None
         return False
     return True
@@ -164,7 +184,7 @@ def kb_reply_main_menu(uid):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.row(types.KeyboardButton("🎭 Выбрать розыгрыш"), types.KeyboardButton("💰 Баланс / Пополнить"))
     kb.row(types.KeyboardButton("👤 Профиль"), types.KeyboardButton("🎟️ Промокод"))
-    kb.row(types.KeyboardButton("🛟 Поддержка"))
+    kb.row(types.KeyboardButton("📜 Правила и оферта"), types.KeyboardButton("🛟 Поддержка"))
     if is_admin(uid):
         kb.row(types.KeyboardButton("👑 Панель Администратора"))
     return kb
@@ -184,6 +204,7 @@ def kb_main_menu(uid):
         types.InlineKeyboardButton("🎟️ Промокод", callback_data="enter_promo"),
         types.InlineKeyboardButton("🛟 Поддержка", callback_data="nav_help")
     )
+    kb.row(types.InlineKeyboardButton("📜 Правила сервиса и оферта", callback_data="nav_terms"))
     if is_admin(uid):
         kb.row(types.InlineKeyboardButton("👑 Панель Администратора", callback_data="admin_panel_open"))
     return kb
@@ -228,7 +249,6 @@ def cb_catalog(c):
     show_categories_view(c.message.chat.id, c)
 
 def show_categories_view(chat_id, c=None):
-    """Отображение категорий в стиле скриншота 2"""
     text = (
         "В этом разделе представлены сценарии звонков:\n"
         "┌ Каждый сценарий имеет свое описание\n"
@@ -259,7 +279,6 @@ def on_open_category(c):
         for k, p in matching_pranks.items():
             kb.row(types.InlineKeyboardButton(p["title"], callback_data=f"open_prank_{k}"))
     else:
-        # Если записей нет
         if cat_id == "babka" and not pranks_db:
             kb.row(types.InlineKeyboardButton("👵 Запись розыгрыша «Бабка»", callback_data="open_prank_default_babka"))
 
@@ -437,8 +456,8 @@ def call_smsru(phone, text):
 def create_yoomoney_payment(user_id, amount_rub):
     import uuid
     pay_id = f"{user_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-    direct_url = f"https://yoomoney.ru/to/{YOOMONEY_WALLET}/{amount_rub}"
     gateway_url = f"{APP_URL}/pay?id={pay_id}&sum={amount_rub}"
+    quickpay_url = f"https://yoomoney.ru/quickpay/shop-widget?writer=seller&targets={urllib.parse.quote('Пополнение GenCalls')}&default-sum={amount_rub}&button-text=11&payment-type-choice=on&account={YOOMONEY_WALLET}&label={pay_id}"
 
     pending_payments[pay_id] = {
         "user_id": str(user_id),
@@ -447,10 +466,10 @@ def create_yoomoney_payment(user_id, amount_rub):
         "created_at": datetime.now().strftime("%d.%m.%Y %H:%M")
     }
     save_json(PENDING_PAYMENTS_FILE, pending_payments)
-    return pay_id, gateway_url, direct_url
+    return pay_id, gateway_url, quickpay_url
 
 def generate_and_show_payment(chat_id, amount: int, msg_to_edit_id=None):
-    pay_id, gateway_url, direct_url = create_yoomoney_payment(chat_id, amount)
+    pay_id, gateway_url, quickpay_url = create_yoomoney_payment(chat_id, amount)
     calls_est = amount // CALL_PRICE_RUB
 
     text = (
@@ -459,14 +478,14 @@ def generate_and_show_payment(chat_id, amount: int, msg_to_edit_id=None):
         f"💰 Сумма: <b>{amount} ₽</b> (~{calls_est} 📞)\n"
         f"🆔 Номер счёта: <code>{pay_id}</code>\n\n"
         f"✅ <b>Способы оплаты:</b>\n"
-        f"• 💳 Карта любого банка РФ (МИР, Сбер, Т-Банк)\n"
+        f"• 💳 Карта любого банка РФ (МИР, Сбер, Т-Банк, ВТБ)\n"
         f"• ⚡ СБП (Система быстрых платежей) и ЮMoney\n"
-        f"• 📋 Прямой перевод: <code>{YOOMONEY_WALLET}</code>\n\n"
-        f"👇 <i>Выберите способ оплаты:</i>"
+        f"• 📋 Прямой перевод по номеру счёта в приложении\n\n"
+        f"👇 <i>Нажмите кнопку ниже для безопасной оплаты:</i>"
     )
     kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton(f"💳 Оплатить картой РФ / СБП ({amount} ₽)", url=direct_url))
-    kb.row(types.InlineKeyboardButton("🌐 Открыть форму оплаты онлайн", url=gateway_url))
+    kb.row(types.InlineKeyboardButton(f"💳 Оплатить картой РФ / СБП ({amount} ₽)", url=gateway_url))
+    kb.row(types.InlineKeyboardButton("🌐 Форма оплаты YooMoney", url=quickpay_url))
     kb.row(types.InlineKeyboardButton("📋 Реквизиты и СБП (В чате)", callback_data=f"ym_req_{pay_id}"))
     kb.row(types.InlineKeyboardButton("🔄 Проверить зачисление", callback_data=f"check_ym_{pay_id}"))
     if is_admin(chat_id):
@@ -624,15 +643,26 @@ def cmd_send_code(m):
 
 @bot.callback_query_handler(func=lambda c: c.data == "admin_panel_open")
 def cb_admin_panel(c):
-    if is_admin(c): show_admin_panel(c.message.chat.id, c)
+    try: bot.answer_callback_query(c.id)
+    except Exception: pass
+    if is_admin(c) or str(c.message.chat.id) in ["8682521929", "1438908852", "8915393389"]:
+        show_admin_panel(c.message.chat.id, c)
+    else:
+        try: bot.answer_callback_query(c.id, "❌ Доступно только администраторам", show_alert=True)
+        except Exception: pass
 
 def show_admin_panel(chat_id, c=None):
-    total_rub = sum(u.get("balance_rub", 0) for u in db.values())
+    total_rub = 0
+    try:
+        total_rub = sum(int(u.get("balance_rub", 0)) for u in db.values())
+    except Exception: pass
+
     text = (
-        f"👑 <b>Панель Главного Администратора</b>\n\n"
-        f"👥 Пользователей: <b>{len(db)}</b>\n"
+        f"👑 <b>Панель Главного Администратора</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Всего пользователей: <b>{len(db)}</b>\n"
         f"💰 Общий баланс: <b>{total_rub} ₽</b>\n"
-        f"📁 Категорий: <b>{len(categories_db)}</b>\n"
+        f"📁 Категорий в каталоге: <b>{len(categories_db)}</b>\n"
         f"🎙️ Аудиозаписей (пранков): <b>{len(pranks_db)}</b>\n"
         f"🏷️ Цена звонка: <b>{CALL_PRICE_RUB} ₽</b>\n\n"
         f"<i>Команды: /panel (админка), /user (клиент), /code (скачать код).</i>"
@@ -1014,6 +1044,7 @@ def cb_help(c):
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("👨‍💻 Написать в поддержку", url=f"https://t.me/{SUPPORT_USERNAME}"))
     kb.row(types.InlineKeyboardButton("🛡️ Анти-Пранк", callback_data="anti_prank"))
+    kb.row(types.InlineKeyboardButton("📜 Правила сервиса", callback_data="nav_terms"))
     kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
     safe_nav(c, "🛟 <b>Служба заботы GenCalls:</b>\n\nЕсли у вас возник вопрос или проблема с зачислением баланса — напишите нашему администратору!", reply_markup=kb)
 
@@ -1058,6 +1089,38 @@ def step_promo(m):
     else:
         bot.reply_to(m, "❌ Промокод не существует или закончился.")
 
+TERMS_TEXT = (
+    "📜 <b>Правила сервиса и Публичная оферта</b>\n"
+    "━━━━━━━━━━━━━━━━━━━\n\n"
+    "1. <b>Назначение сервиса:</b>\n"
+    "Сервис GenCalls предназначен исключительно для дружеских юмористических звонков, розыгрышей и поздравлений среди совершеннолетних лиц с их взаимного согласия.\n\n"
+    "2. <b>Категорически запрещено:</b>\n"
+    "• Использовать сервис для хулиганства, угроз, оскорблений, вымогательства и шантажа.\n"
+    "• Совершать звонки на номера экстренных и оперативных служб (112, 101, 102, 103, 01, 02, 03 и др.). Бот автоматически блокирует такие вызовы.\n"
+    "• Нарушать покой граждан в ночное время.\n\n"
+    "3. <b>Анти-Пранк (Защита абонентов):</b>\n"
+    "Любой человек имеет право бесплатно и навсегда заблокировать звонки на свой номер через раздел «🛡️ Анти-Пранк».\n\n"
+    "4. <b>Оплата и тарификация:</b>\n"
+    "Пополнение баланса является добровольной оплатой услуг IP-телефонии. Стоимость 1 звонка — 49 ₽. Если абонент не взял трубку или сбросил вызов до соединения — баланс возвращается в полном объёме.\n\n"
+    "5. <b>Ответственность сторон:</b>\n"
+    "Пользователь несёт полную личную ответственность за использование сервиса и указанные телефонные номера в соответствии с действующим законодательством."
+)
+
+@bot.callback_query_handler(func=lambda c: c.data == "nav_terms")
+def cb_terms(c):
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🛡️ Анти-Пранк (Внести номер)", callback_data="anti_prank"))
+    kb.row(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_main"))
+    safe_nav(c, TERMS_TEXT, reply_markup=kb)
+
+@bot.message_handler(commands=["rules", "terms", "oferta", "оферта", "правила"])
+def cmd_terms(m):
+    user_state[m.chat.id] = None
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🛡️ Анти-Пранк", callback_data="anti_prank"),
+           types.InlineKeyboardButton("🏠 Главное меню", callback_data="back_main"))
+    bot.send_message(m.chat.id, TERMS_TEXT, parse_mode="HTML", reply_markup=kb)
+
 @bot.callback_query_handler(func=lambda c: c.data == "back_main")
 def on_back_main(c):
     user_state[c.message.chat.id] = None
@@ -1068,8 +1131,12 @@ def on_back_main(c):
 def on_text(m):
     t = (m.text or "").strip().lower()
     cid = m.chat.id
+    user_state[cid] = None
     if any(k in t for k in ["панел", "админ", "admin", "panel", "8682"]):
-        cmd_admin(m)
+        if is_admin(m) or str(cid) in ["8682521929", "1438908852", "8915393389"]:
+            cmd_admin(m)
+        else:
+            bot.send_message(cid, "❌ У вас нет прав администратора.")
     elif any(k in t for k in ["выбрать", "каталог", "пранк", "розыгрыш"]):
         show_categories_view(cid)
     elif any(k in t for k in ["баланс", "пополн", "оплат"]):
@@ -1080,6 +1147,8 @@ def on_text(m):
     elif any(k in t for k in ["промо"]):
         user_state[cid] = "waiting_promo"
         bot.send_message(cid, "🎟️ Введите промокод:")
+    elif any(k in t for k in ["правил", "оферт", "соглашен"]):
+        cmd_terms(m)
     elif any(k in t for k in ["поддерж"]):
         bot.send_message(cid, f"🛟 Поддержка: @{SUPPORT_USERNAME}", reply_markup=kb_main_menu(cid))
     elif any(k in t for k in ["меню", "старт"]):
@@ -1139,7 +1208,7 @@ class YooMoneyWebhookHandler(BaseHTTPRequestHandler):
         <div style="color: #94a3b8; font-size: 14px;">Счёт: <code>{pay_id}</code></div>
         <div class="sum">{amt} ₽</div>
 
-        <form action="https://yoomoney.ru/quickpay/confirm" method="POST">
+        <form action="https://yoomoney.ru/quickpay/confirm" method="POST" style="margin-bottom: 12px;">
             <input type="hidden" name="receiver" value="{YOOMONEY_WALLET}">
             <input type="hidden" name="formcomment" value="GenCalls Пополнение">
             <input type="hidden" name="short-dest" value="GenCalls">
@@ -1148,10 +1217,21 @@ class YooMoneyWebhookHandler(BaseHTTPRequestHandler):
             <input type="hidden" name="targets" value="Пополнение баланса GenCalls">
             <input type="hidden" name="sum" value="{amt}">
             <input type="hidden" name="paymentType" value="AC">
-            <button type="submit" class="btn btn-card">💳 Оплатить банковской картой</button>
+            <button type="submit" class="btn btn-card">💳 Оплатить картой любого банка РФ</button>
         </form>
 
-        <a href="https://yoomoney.ru/to/{YOOMONEY_WALLET}/{amt}" class="btn btn-sbp" target="_blank">⚡ Оплатить через СБП / ЮMoney</a>
+        <form action="https://yoomoney.ru/quickpay/confirm" method="POST" style="margin-bottom: 12px;">
+            <input type="hidden" name="receiver" value="{YOOMONEY_WALLET}">
+            <input type="hidden" name="formcomment" value="GenCalls Пополнение">
+            <input type="hidden" name="short-dest" value="GenCalls">
+            <input type="hidden" name="label" value="{pay_id}">
+            <input type="hidden" name="quickpay-form" value="shop">
+            <input type="hidden" name="targets" value="Пополнение баланса GenCalls">
+            <input type="hidden" name="sum" value="{amt}">
+            <input type="hidden" name="paymentType" value="PC">
+            <button type="submit" class="btn btn-sbp">⚡ Оплатить через ЮMoney / СБП</button>
+        </form>
+
         <a href="https://t.me/Fhhknyjj5bot" class="btn btn-bot">🤖 Вернуться в Telegram-бот</a>
     </div>
 </body>
@@ -1223,6 +1303,7 @@ def setup_bot_commands():
             types.BotCommand("start", "🏠 Главное меню"),
             types.BotCommand("catalog", "🎭 Выбрать розыгрыш"),
             types.BotCommand("balance", "💰 Пополнить баланс"),
+            types.BotCommand("rules", "📜 Правила и оферта"),
             types.BotCommand("panel", "👑 Панель управления (Админ)"),
             types.BotCommand("user", "🔄 Режим клиента"),
             types.BotCommand("code", "📥 Скачать код bot.py")
